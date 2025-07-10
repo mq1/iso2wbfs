@@ -1,0 +1,17 @@
+I’m giving you the source code of the 2009 program “wbfs_file”.
+I use it like “./wbfs_file input_iso.iso”. I don’t use any flag, or change the default behavior.
+I want to replicate this behavior in python, also specifying the output directory. I’m only interested in the default behavior of the original program.
+Seek the relevant C code parts, and translate them to Python.
+Keep in mind that the original implementation may be compiled for x86_32 only.
+The split size must be always 4gb-32kb.
+Replicate also the decryption, scrubbing and all the behavior of the original program.
+Produce a clean, organized, optimized and production ready drop in python script “iso2wbfs.py”, with extensive logging for debugging (toggled with -v/—verbose) and progress indicator.
+Use the cryptography and tqdm libraries (tqdm optional, don’t log progress if missing).
+The script must create the output dir if nonexistent.
+It’s very important that the output is bit-per-bit identical to the one of the original program.
+
+
+---
+
+
+now make it into a rust cli and library
