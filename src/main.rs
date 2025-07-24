@@ -74,7 +74,7 @@ fn main() {
 
     match WbfsConverter::new(&args.iso_path, &args.output_dir) {
         Ok(mut converter) => {
-            if let Err(e) = converter.convert(Some(progress_callback)) {
+            if let Err(e) = converter.convert(Some(&progress_callback)) {
                 pb.abandon_with_message("Failed");
                 handle_error(e);
             }

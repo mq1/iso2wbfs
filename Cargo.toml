@@ -4,6 +4,11 @@ version = "1.0.0"
 edition = "2024"
 description = "A Rust utility to convert Wii ISO files to WBFS format, replicating wbfs_file v2.9."
 license = "GPL-2.0-only"
+repository = "https://github.com/mq1/iso2wbfs"
+keywords = ["wii", "wbfs", "iso", "converter"]
+categories = ["command-line-utilities", "filesystem", "multimedia"]
+authors = ["Manuel Quarneti <mq1@ik.me>"]
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -40,3 +45,9 @@ required-features = ["cli"]
 [lib]
 name = "iso2wbfs"
 path = "src/lib.rs"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+cargo = "deny"
