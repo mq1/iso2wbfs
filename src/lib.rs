@@ -267,6 +267,33 @@ impl WbfsConverter {
         Ok(data)
     }
 
+    /// Marks the sectors used by a file in the usage table without reading or decrypting data.
+    /// This is an optimized version of `read_iso_partition_data` for the scrubbing process.
+    fn mark_used_sectors(
+        &mut self,
+        part_offset: u64,
+        mut offset: u64,
+        mut size: u64,
+    ) -> Result<(), WbfsError> {
+        while size > 0 {
+            let block_index = offset / 0x7C00;
+            let offset_in_block = (offset % 0x7C00) as usize;
+
+            let block_offset =
+                part_offset + self.part_data_offset + (block_index * WII_SECTOR_SIZE);
+
+            let usage_index = (block_offset / WII_SECTOR_SIZE) as usize;
+            if usage_index < self.usage_table.len() {
+                self.usage_table[usage_index] = true;
+            }
+
+            let read_len = std::cmp::min(usize::try_from(size)?, 0x7C00 - offset_in_block);
+            offset += read_len as u64;
+            size -= read_len as u64;
+        }
+        Ok(())
+    }
+
     fn traverse_fst(
         &mut self,
         part_offset: u64,
@@ -291,8 +318,8 @@ impl WbfsConverter {
             if !is_dir {
                 let file_offset = u32::from_be_bytes(entry[4..8].try_into().unwrap());
                 let file_size = u32::from_be_bytes(entry[8..12].try_into().unwrap());
-                // "Read" the file to mark its sectors as used.
-                self.read_iso_partition_data(
+                // Mark sectors as used without reading/decrypting file data.
+                self.mark_used_sectors(
                     part_offset,
                     u64::from(file_offset) * 4,
                     u64::from(file_size),
