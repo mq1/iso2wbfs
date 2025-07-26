@@ -2,12 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
-use iso2wbfs::{ProgressUpdate, WbfsConverter, WbfsError};
+use iso2wbfs::{WbfsConverter, WbfsError};
 use log::{error, info};
 use std::path::PathBuf;
 use std::process::exit;
-use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -32,37 +30,6 @@ fn main() {
     let log_level = if args.verbose { "debug" } else { "info" };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
 
-    // Setup a single progress bar that we will manage across stages.
-    let pb = ProgressBar::new(0); // Start with length 0
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
-    pb.set_message("Scrubbing ISO (calculating used sectors)...");
-    pb.enable_steady_tick(Duration::from_millis(100));
-
-    // Define the closure that will handle progress updates.
-    let progress_callback = |update: ProgressUpdate| match update {
-        ProgressUpdate::ConversionStart { total_blocks } => {
-            pb.set_length(total_blocks);
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-                    .unwrap()
-                    .progress_chars("#+-"),
-            );
-            pb.set_message("Converting");
-            pb.set_position(0);
-        }
-        ProgressUpdate::ConversionUpdate { current_block } => {
-            pb.set_position(current_block);
-        }
-        ProgressUpdate::Done => {
-            pb.finish_with_message("Conversion complete!");
-        }
-    };
-
     info!(
         "Starting conversion for: {}",
         args.iso_path.display()
@@ -70,13 +37,11 @@ fn main() {
 
     match WbfsConverter::new(&args.iso_path, &args.output_dir) {
         Ok(mut converter) => {
-            if let Err(e) = converter.convert(Some(&progress_callback)) {
-                pb.abandon_with_message("Failed");
+            if let Err(e) = converter.convert() {
                 handle_error(e);
             }
         }
         Err(e) => {
-            pb.abandon_with_message("Failed");
             handle_error(e);
         }
     }

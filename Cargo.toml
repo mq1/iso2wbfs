@@ -24,9 +24,6 @@ thiserror = "2.0.12"
 # Logging
 log = "0.4.27"
 
-# Progress Bar (optional for library, used by binary)
-indicatif = { version = "0.18.0", optional = true }
-
 # CLI Parsing (used by binary)
 clap = { version = "4.5.41", features = ["derive"], optional = true }
 
@@ -35,7 +32,7 @@ env_logger = { version = "0.11.8", optional = true }
 
 [features]
 # The 'cli' feature enables all dependencies needed for the command-line tool.
-cli = ["clap", "indicatif", "env_logger"]
+cli = ["clap", "env_logger"]
 
 [[bin]]
 name = "iso2wbfs"

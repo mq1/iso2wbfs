@@ -12,9 +12,6 @@ use cbc::Decryptor;
 use log::{debug, error, info};
 use thiserror::Error;
 
-// --- Type Aliases for Readability ---
-type Aes128CbcDec = Decryptor<Aes128>;
-
 // --- Constants ---
 const WII_SECTOR_SIZE: u64 = 0x8000; // 32 KB
 const WBFS_MAGIC: u32 = 0x5742_4653; // "WBFS"
@@ -43,40 +40,31 @@ pub enum WbfsError {
     ConversionError(#[from] std::num::TryFromIntError),
 }
 
-/// Enum to report progress updates from the library to the consumer.
-pub enum ProgressUpdate {
-    /// Indicates the main conversion has started, providing the total number of blocks.
-    ConversionStart { total_blocks: u64 },
-    /// Reports progress during the main conversion.
-    ConversionUpdate { current_block: u64 },
-    /// Indicates the entire process is complete.
-    Done,
-}
-
-// --- Split File Writer (No changes) ---
-struct SplitWbfsWriter {
+// --- Split File Writer ---
+pub struct SplitWbfsWriter {
+    file_handles: HashMap<usize, BufWriter<File>>,
     base_path: PathBuf,
     split_size: u64,
-    file_handles: HashMap<usize, BufWriter<File>>,
-    temp_path: PathBuf,
-    final_path: PathBuf,
 }
 
 impl SplitWbfsWriter {
-    fn new(base_path: PathBuf, split_size: u64) -> Result<Self, WbfsError> {
-        let temp_path = base_path.with_extension("wbfs.tmp");
-        let final_path = base_path.with_extension("wbfs");
+    pub fn new(path: impl AsRef<Path>, split_size: u64) -> Result<Self, WbfsError> {
+        let path = path.as_ref();
+        let mut file_handles = HashMap::new();
 
-        if temp_path.exists() || final_path.exists() {
-            return Err(WbfsError::FileExists(final_path.display().to_string()));
+        if split_size == 0 {
+            let file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)?;
+            file_handles.insert(0, BufWriter::new(file));
         }
 
-        Ok(Self {
-            base_path,
+        Ok(SplitWbfsWriter {
+            file_handles,
+            base_path: path.to_path_buf(),
             split_size,
-            file_handles: HashMap::new(),
-            temp_path,
-            final_path,
         })
     }
 
@@ -86,7 +74,7 @@ impl SplitWbfsWriter {
 
         if !self.file_handles.contains_key(&file_index) {
             let path = if file_index == 0 {
-                self.temp_path.clone()
+                self.base_path.clone()
             } else {
                 self.base_path.with_extension(format!("wbf{file_index}"))
             };
@@ -143,14 +131,9 @@ impl SplitWbfsWriter {
 
 impl Drop for SplitWbfsWriter {
     fn drop(&mut self) {
-        if self.temp_path.exists() {
-            info!(
-                "Renaming {} to {}",
-                self.temp_path.display(),
-                self.final_path.display()
-            );
-            if let Err(e) = std::fs::rename(&self.temp_path, &self.final_path) {
-                error!("Failed to rename temporary file: {e}");
+        for (idx, mut fh) in self.file_handles.drain() {
+            if let Err(e) = fh.flush() {
+                error!("Failed to flush file handle for split {idx}: {e}");
             }
         }
     }
@@ -192,7 +175,7 @@ impl WbfsConverter {
     }
 
     fn aes_decrypt(key: &[u8; 16], iv: &[u8; 16], data: &mut [u8]) -> Result<(), WbfsError> {
-        let dec = Aes128CbcDec::new_from_slices(key, iv)
+        let dec = Decryptor::<Aes128>::new_from_slices(key, iv)
             .map_err(|e| WbfsError::Crypto(e.to_string()))?;
 
         dec.decrypt_padded_mut::<NoPadding>(data)
@@ -372,17 +355,12 @@ impl WbfsConverter {
 
     /// The main conversion method.
     ///
-    /// The `progress_callback` is an optional closure that receives `ProgressUpdate`
-    /// events, allowing the caller to display progress.
     /// Converts the ISO to WBFS format
     ///
     /// # Errors
     ///
     /// Returns an error if any I/O operation fails or if the ISO is not a valid Wii disc
-    pub fn convert(
-        &mut self,
-        progress_callback: Option<&impl Fn(ProgressUpdate)>,
-    ) -> Result<(), WbfsError> {
+    pub fn convert(&mut self) -> Result<(), WbfsError> {
         // --- Stage 1: Scrubbing ---
         self.build_disc_usage_table()?;
 
@@ -398,7 +376,7 @@ impl WbfsConverter {
         let output_name = format!("{title} [{game_id}]");
         let final_dir = self.output_dir.join(&output_name);
         std::fs::create_dir_all(&final_dir)?;
-        let wbfs_base_path = final_dir.join(&game_id);
+        let wbfs_base_path = final_dir.join(&game_id).with_extension("wbfs");
 
         info!("Game: '{title}' ({game_id})");
         info!("Output will be in: {}", final_dir.display());
@@ -424,12 +402,6 @@ impl WbfsConverter {
             dual_layer_wbfs_blocks
         };
 
-        if let Some(cb) = &progress_callback {
-            cb(ProgressUpdate::ConversionStart {
-                total_blocks: total_blocks_to_process as u64,
-            });
-        }
-
         let mut disc_info = vec![0u8; 0x100 + (MAX_WII_SECTORS >> wbfs_block_size_shift) * 2];
         disc_info[..0x100].copy_from_slice(&iso_header);
         let wlba_table_offset = 0x100;
@@ -439,10 +411,6 @@ impl WbfsConverter {
         let mut wbfs_block_buffer = vec![0; usize::try_from(wbfs_sec_sz)?];
 
         for i in 0..total_blocks_to_process {
-            if let Some(cb) = &progress_callback {
-                cb(ProgressUpdate::ConversionUpdate { current_block: i as u64 });
-            }
-
             let start_sec = i * wii_sec_per_wbfs_sec;
             let end_sec = start_sec + wii_sec_per_wbfs_sec - 1;
             let mut used = false;
@@ -490,11 +458,7 @@ impl WbfsConverter {
         let final_size = u64::from(free_block_allocator) * wbfs_sec_sz;
         writer.truncate(final_size)?;
 
-        if let Some(cb) = &progress_callback {
-            cb(ProgressUpdate::Done);
-        } else {
-            info!("Conversion complete!");
-        }
+        info!("Conversion complete!");
         Ok(())
     }
 }
