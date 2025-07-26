@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use aes::Aes128;
@@ -43,8 +43,6 @@ pub enum WbfsError {
     ConversionError(#[from] std::num::TryFromIntError),
 }
 
-
-
 /// Enum to report progress updates from the library to the consumer.
 pub enum ProgressUpdate {
     /// Indicates the scrubbing process has started.
@@ -61,7 +59,7 @@ pub enum ProgressUpdate {
 struct SplitWbfsWriter {
     base_path: PathBuf,
     split_size: u64,
-    file_handles: HashMap<usize, File>,
+    file_handles: HashMap<usize, BufWriter<File>>,
     temp_path: PathBuf,
     final_path: PathBuf,
 }
@@ -84,7 +82,7 @@ impl SplitWbfsWriter {
         })
     }
 
-    fn get_file(&mut self, offset: u64) -> Result<(&mut File, u64), WbfsError> {
+    fn get_file(&mut self, offset: u64) -> Result<(&mut BufWriter<File>, u64), WbfsError> {
         let file_index = usize::try_from(offset / self.split_size)?;
         let relative_offset = offset % self.split_size;
 
@@ -100,7 +98,7 @@ impl SplitWbfsWriter {
                 .create(true)
                 .truncate(true)
                 .open(path)?;
-            self.file_handles.insert(file_index, file);
+            self.file_handles.insert(file_index, BufWriter::new(file));
         }
 
         Ok((
@@ -135,7 +133,7 @@ impl SplitWbfsWriter {
             fh.flush()?;
             let chunk_size = std::cmp::min(remaining_size, self.split_size);
             debug!("Truncating file index {i} to {chunk_size} bytes.");
-            fh.set_len(chunk_size)?;
+            fh.get_mut().set_len(chunk_size)?;
             remaining_size -= chunk_size;
             if remaining_size == 0 {
                 break;
@@ -164,10 +162,13 @@ impl Drop for SplitWbfsWriter {
 /// A converter for Wii ISO files to WBFS format.
 pub struct WbfsConverter {
     output_dir: PathBuf,
-    iso_file: File,
+    iso_file: BufReader<File>,
     disc_key: [u8; 16],
     usage_table: Vec<bool>,
     part_data_offset: u64,
+    // --- Reusable Buffers for Optimization ---
+    sector_buffer: Vec<u8>,
+    decrypted_buffer: Vec<u8>,
 }
 
 impl WbfsConverter {
@@ -180,12 +181,15 @@ impl WbfsConverter {
     /// # Errors
     /// Returns `WbfsError::IoError` if the ISO file cannot be opened or read
     pub fn new(iso_path: impl AsRef<Path>, output_dir: impl AsRef<Path>) -> Result<Self, WbfsError> {
+        let sector_size = usize::try_from(WII_SECTOR_SIZE)?;
         Ok(Self {
             output_dir: output_dir.as_ref().to_path_buf(),
-            iso_file: File::open(iso_path.as_ref())?,
+            iso_file: BufReader::new(File::open(iso_path.as_ref())?),
             disc_key: [0; 16],
             usage_table: vec![false; MAX_WII_SECTORS],
             part_data_offset: 0,
+            sector_buffer: vec![0; sector_size],
+            decrypted_buffer: vec![0; sector_size],
         })
     }
 
@@ -211,10 +215,10 @@ impl WbfsConverter {
         Ok(key)
     }
 
-    fn read_iso_data(&mut self, offset: u64, size: usize) -> Result<Vec<u8>, WbfsError> {
-        let mut buffer = vec![0; size];
+    fn read_iso_data(&mut self, offset: u64, size: usize) -> Result<&[u8], WbfsError> {
         self.iso_file.seek(SeekFrom::Start(offset))?;
-        self.iso_file.read_exact(&mut buffer)?;
+        let buffer = &mut self.sector_buffer[..size];
+        self.iso_file.read_exact(buffer)?;
         Ok(buffer)
     }
 
@@ -225,25 +229,32 @@ impl WbfsConverter {
         mut size: u64,
     ) -> Result<Vec<u8>, WbfsError> {
         let mut data = Vec::with_capacity(usize::try_from(size)?);
+
         while size > 0 {
             let block_index = offset / 0x7C00;
             let offset_in_block = (offset % 0x7C00) as usize;
 
             let block_offset =
-            part_offset + self.part_data_offset + (block_index * WII_SECTOR_SIZE);
-            let mut raw_block = self.read_iso_data(block_offset, usize::try_from(WII_SECTOR_SIZE)?)?;
+                part_offset + self.part_data_offset + (block_index * WII_SECTOR_SIZE);
+
+            self.iso_file
+                .seek(SeekFrom::Start(block_offset))?;
+            self.iso_file.read_exact(&mut self.sector_buffer)?;
 
             let usage_index = (block_offset / WII_SECTOR_SIZE) as usize;
             if usage_index < self.usage_table.len() {
                 self.usage_table[usage_index] = true;
             }
 
-            let iv: [u8; 16] = raw_block[0x3D0..0x3D0 + 16].try_into().unwrap();
-            let encrypted_data = &mut raw_block[0x400..0x400 + 0x7C00];
-            Self::aes_decrypt(&self.disc_key, &iv, encrypted_data)?;
+            let iv: [u8; 16] = self.sector_buffer[0x3D0..0x3D0 + 16].try_into().unwrap();
+            let encrypted_data = &mut self.sector_buffer[0x400..0x400 + 0x7C00];
+
+            // Decrypt in-place into the decrypted_buffer
+            self.decrypted_buffer[..0x7C00].copy_from_slice(encrypted_data);
+            Self::aes_decrypt(&self.disc_key, &iv, &mut self.decrypted_buffer[..0x7C00])?;
 
             let read_len = std::cmp::min(usize::try_from(size)?, 0x7C00 - offset_in_block);
-            data.extend_from_slice(&encrypted_data[offset_in_block..offset_in_block + read_len]);
+            data.extend_from_slice(&self.decrypted_buffer[offset_in_block..offset_in_block + read_len]);
 
             offset += read_len as u64;
             size -= read_len as u64;
@@ -267,7 +278,7 @@ impl WbfsConverter {
                 self.read_iso_partition_data(
                     part_offset,
                     u64::from(file_offset) * 4,
-                                             u64::from(file_size),
+                    u64::from(file_size),
                 )?;
             }
         }
@@ -280,29 +291,29 @@ impl WbfsConverter {
         self.usage_table[(0x40000 / WII_SECTOR_SIZE) as usize] = true;
         self.usage_table[(0x4E000 / WII_SECTOR_SIZE) as usize] = true;
 
-        let part_table_info = self.read_iso_data(0x40000, 0x20)?;
+        let part_table_info = self.read_iso_data(0x40000, 0x20)?.to_vec();
         let num_partitions = u32::from_be_bytes(part_table_info[0..4].try_into().unwrap());
         let part_table_offset =
-        u64::from(u32::from_be_bytes(part_table_info[4..8].try_into().unwrap())) * 4;
+            u64::from(u32::from_be_bytes(part_table_info[4..8].try_into().unwrap())) * 4;
 
         debug!(
             "Found {num_partitions} partitions at offset {part_table_offset:#x}"
         );
         let part_info_data =
-        self.read_iso_data(part_table_offset, (num_partitions * 8) as usize)?;
+            self.read_iso_data(part_table_offset, (num_partitions * 8) as usize)?.to_vec();
 
         for i in 0..num_partitions {
             let offset = (i * 8) as usize;
             let part_offset =
-            u64::from(u32::from_be_bytes(part_info_data[offset..offset + 4].try_into().unwrap()))
-            * 4;
+                u64::from(u32::from_be_bytes(part_info_data[offset..offset + 4].try_into().unwrap()))
+                * 4;
             let part_type =
-            u32::from_be_bytes(part_info_data[offset + 4..offset + 8].try_into().unwrap());
+                u32::from_be_bytes(part_info_data[offset + 4..offset + 8].try_into().unwrap());
             info!(
                 "Analyzing Partition {i}: type={part_type}, offset={part_offset:#x}"
             );
 
-            let ticket = self.read_iso_data(part_offset, 0x2A4)?;
+            let ticket = self.read_iso_data(part_offset, 0x2A4)?.to_vec();
             self.disc_key = Self::decrypt_title_key(&ticket)?;
             debug!(
                 "Decrypted Disc Key for partition {}: {}",
@@ -310,15 +321,15 @@ impl WbfsConverter {
                 hex::encode(self.disc_key)
             );
 
-            let part_header = self.read_iso_data(part_offset + 0x2A4, 0x1C)?;
+            let part_header = self.read_iso_data(part_offset + 0x2A4, 0x1C)?.to_vec();
             self.part_data_offset =
-            u64::from(u32::from_be_bytes(part_header[0x14..0x18].try_into().unwrap())) * 4;
+                u64::from(u32::from_be_bytes(part_header[0x14..0x18].try_into().unwrap())) * 4;
 
             let part_main_header = self.read_iso_partition_data(part_offset, 0, 0x480)?;
             let fst_offset =
-            u64::from(u32::from_be_bytes(part_main_header[0x424..0x428].try_into().unwrap())) * 4;
+                u64::from(u32::from_be_bytes(part_main_header[0x424..0x428].try_into().unwrap())) * 4;
             let fst_size =
-            u64::from(u32::from_be_bytes(part_main_header[0x428..0x42C].try_into().unwrap())) * 4;
+                u64::from(u32::from_be_bytes(part_main_header[0x428..0x42C].try_into().unwrap())) * 4;
 
             debug!(
                 "FST located at offset {fst_offset:#x} with size {fst_size:#x}"
@@ -349,12 +360,12 @@ impl WbfsConverter {
         self.build_disc_usage_table()?;
 
         // --- Stage 2: Conversion ---
-        let iso_header = self.read_iso_data(0, 0x100)?;
+        let iso_header = self.read_iso_data(0, 0x100)?.to_vec();
         let game_id = String::from_utf8_lossy(&iso_header[..6]).to_string();
         let mut title: String = String::from_utf8_lossy(&iso_header[0x20..0x60])
-        .trim_end_matches('\0')
-        .trim()
-        .to_string();
+            .trim_end_matches('\0')
+            .trim()
+            .to_string();
         title.retain(|c| !INVALID_PATH_CHARS.contains(&c));
 
         let output_name = format!("{title} [{game_id}]");
@@ -398,35 +409,43 @@ impl WbfsConverter {
 
         let mut free_block_allocator = 1u16;
 
-        // The loop now iterates only over the necessary number of blocks.
-        for i in 0..total_blocks_to_process {
-            let start_sec = i * wii_sec_per_wbfs_sec;
-            let end_sec = start_sec + wii_sec_per_wbfs_sec;
-            let is_used = self.usage_table[start_sec..end_sec].iter().any(|&x| x);
+        let mut wbfs_block_buffer = vec![0; usize::try_from(wbfs_sec_sz)?];
 
-            if is_used {
-                if free_block_allocator == u16::MAX {
-                    return Err(WbfsError::PartitionFull);
+        for i in 0..total_blocks_to_process {
+            if let Some(cb) = &progress_callback {
+                cb(ProgressUpdate::ConversionUpdate { current_block: i as u64 });
+            }
+
+            let start_sec = i * wii_sec_per_wbfs_sec;
+            let end_sec = start_sec + wii_sec_per_wbfs_sec - 1;
+            let mut used = false;
+            for k in start_sec..=end_sec {
+                if self.usage_table[k] {
+                    used = true;
+                    break;
                 }
+            }
+
+            if used {
                 let block_addr = free_block_allocator;
                 free_block_allocator += 1;
+                if free_block_allocator == 0 { // overflow
+                    return Err(WbfsError::PartitionFull);
+                }
 
                 disc_info[wlba_table_offset + i * 2..wlba_table_offset + i * 2 + 2]
-                .copy_from_slice(&block_addr.to_be_bytes());
+                    .copy_from_slice(&block_addr.to_be_bytes());
 
                 let iso_offset = (start_sec as u64) * WII_SECTOR_SIZE;
-                let wbfs_block_data = self.read_iso_data(iso_offset, usize::try_from(wbfs_sec_sz)?)?;
+
+                self.iso_file.seek(SeekFrom::Start(iso_offset))?;
+                self.iso_file.read_exact(&mut wbfs_block_buffer)?;
 
                 let wbfs_offset = u64::from(block_addr) * wbfs_sec_sz;
-                writer.write(wbfs_offset, &wbfs_block_data)?;
+                writer.write(wbfs_offset, &wbfs_block_buffer)?;
             } else {
                 disc_info[wlba_table_offset + i * 2..wlba_table_offset + i * 2 + 2]
-                .copy_from_slice(&0u16.to_be_bytes());
-            }
-            if let Some(cb) = &progress_callback {
-                cb(ProgressUpdate::ConversionUpdate {
-                    current_block: i as u64 + 1,
-                });
+                    .copy_from_slice(&0u16.to_be_bytes());
             }
         }
 
