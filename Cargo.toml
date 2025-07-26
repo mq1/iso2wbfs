@@ -51,3 +51,10 @@ all = "deny"
 pedantic = "deny"
 nursery = "deny"
 cargo = "deny"
+
+[profile.release]
+opt-level = 3          # Maximum optimization
+lto = true             # Link-time optimization
+codegen-units = 1      # Better optimization at cost of compile time
+panic = "abort"        # Smaller binary, faster execution
+strip = true           # Remove debug symbols

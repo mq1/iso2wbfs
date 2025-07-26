@@ -9,9 +9,3 @@ Produce a clean, organized, optimized and production ready drop in python script
 Use the cryptography and tqdm libraries (tqdm optional, don’t log progress if missing).
 The script must create the output dir if nonexistent.
 It’s very important that the output is bit-per-bit identical to the one of the original program.
-
-
----
-
-
-now make it into a rust cli and library
