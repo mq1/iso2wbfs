@@ -4,9 +4,8 @@
 use anyhow::Result;
 use clap::Parser;
 use iso2wbfs::WbfsConverter;
-use log::{error, info};
+use log::info;
 use std::path::PathBuf;
-use std::process::exit;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
