@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2025 Manuel Quarneti <mq1@ik.me>
 // SPDX-License-Identifier: GPL-2.0-only
 
+use anyhow::Result;
 use clap::Parser;
-use iso2wbfs::{WbfsConverter, WbfsError};
+use iso2wbfs::WbfsConverter;
 use log::{error, info};
 use std::path::PathBuf;
 use std::process::exit;
@@ -23,7 +24,7 @@ struct Args {
     verbose: bool,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     // Setup logging
@@ -35,22 +36,8 @@ fn main() {
         args.iso_path.display()
     );
 
-    match WbfsConverter::new(&args.iso_path, &args.output_dir) {
-        Ok(mut converter) => {
-            if let Err(e) = converter.convert() {
-                handle_error(e);
-            }
-        }
-        Err(e) => {
-            handle_error(e);
-        }
-    }
-}
+    let mut converter = WbfsConverter::new(&args.iso_path, &args.output_dir)?;
+    converter.convert()?;
 
-fn handle_error(e: WbfsError) {
-    error!("A critical error occurred: {}", e);
-    if let WbfsError::Io(io_err) = e {
-        error!("Underlying I/O error: {}", io_err);
-    }
-    exit(1);
+    Ok(())
 }

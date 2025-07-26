@@ -48,6 +48,9 @@ pub struct SplitWbfsWriter {
 }
 
 impl SplitWbfsWriter {
+    /// # Errors
+    ///
+    /// This function will return an error if the file cannot be created.
     pub fn new(path: impl AsRef<Path>, split_size: u64) -> Result<Self, WbfsError> {
         let path = path.as_ref();
         let mut file_handles = HashMap::new();
@@ -61,7 +64,7 @@ impl SplitWbfsWriter {
             file_handles.insert(0, BufWriter::new(file));
         }
 
-        Ok(SplitWbfsWriter {
+        Ok(Self {
             file_handles,
             base_path: path.to_path_buf(),
             split_size,
@@ -203,13 +206,18 @@ impl WbfsConverter {
         Ok(buffer)
     }
 
-    fn read_iso_partition_data(
+    fn process_partition_data(
         &mut self,
         part_offset: u64,
         mut offset: u64,
         mut size: u64,
+        decrypt: bool,
     ) -> Result<Vec<u8>, WbfsError> {
-        let mut data = Vec::with_capacity(usize::try_from(size)?);
+        let mut data = if decrypt {
+            Vec::with_capacity(usize::try_from(size)?)
+        } else {
+            Vec::new()
+        };
 
         while size > 0 {
             let block_index = offset / 0x7C00;
@@ -218,29 +226,41 @@ impl WbfsConverter {
             let block_offset =
                 part_offset + self.part_data_offset + (block_index * WII_SECTOR_SIZE);
 
-            self.iso_file
-                .seek(SeekFrom::Start(block_offset))?;
-            self.iso_file.read_exact(&mut self.sector_buffer)?;
-
             let usage_index = (block_offset / WII_SECTOR_SIZE) as usize;
             if usage_index < self.usage_table.len() {
                 self.usage_table[usage_index] = true;
             }
 
-            let iv: [u8; 16] = self.sector_buffer[0x3D0..0x3D0 + 16].try_into().unwrap();
-            let encrypted_data = &mut self.sector_buffer[0x400..0x400 + 0x7C00];
+            if decrypt {
+                self.iso_file.seek(SeekFrom::Start(block_offset))?;
+                self.iso_file.read_exact(&mut self.sector_buffer)?;
 
-            // Decrypt in-place into the decrypted_buffer
-            self.decrypted_buffer[..0x7C00].copy_from_slice(encrypted_data);
-            Self::aes_decrypt(&self.disc_key, &iv, &mut self.decrypted_buffer[..0x7C00])?;
+                let iv: [u8; 16] = self.sector_buffer[0x3D0..0x3D0 + 16].try_into().unwrap();
+                let encrypted_data = &mut self.sector_buffer[0x400..0x400 + 0x7C00];
+
+                self.decrypted_buffer[..0x7C00].copy_from_slice(encrypted_data);
+                Self::aes_decrypt(&self.disc_key, &iv, &mut self.decrypted_buffer[..0x7C00])?;
+
+                let read_len = std::cmp::min(usize::try_from(size)?, 0x7C00 - offset_in_block);
+                data.extend_from_slice(
+                    &self.decrypted_buffer[offset_in_block..offset_in_block + read_len],
+                );
+            }
 
             let read_len = std::cmp::min(usize::try_from(size)?, 0x7C00 - offset_in_block);
-            data.extend_from_slice(&self.decrypted_buffer[offset_in_block..offset_in_block + read_len]);
-
             offset += read_len as u64;
             size -= read_len as u64;
         }
         Ok(data)
+    }
+
+    fn read_iso_partition_data(
+        &mut self,
+        part_offset: u64,
+        offset: u64,
+        size: u64,
+    ) -> Result<Vec<u8>, WbfsError> {
+        self.process_partition_data(part_offset, offset, size, true)
     }
 
     /// Marks the sectors used by a file in the usage table without reading or decrypting data.
@@ -248,25 +268,10 @@ impl WbfsConverter {
     fn mark_used_sectors(
         &mut self,
         part_offset: u64,
-        mut offset: u64,
-        mut size: u64,
+        offset: u64,
+        size: u64,
     ) -> Result<(), WbfsError> {
-        while size > 0 {
-            let block_index = offset / 0x7C00;
-            let offset_in_block = (offset % 0x7C00) as usize;
-
-            let block_offset =
-                part_offset + self.part_data_offset + (block_index * WII_SECTOR_SIZE);
-
-            let usage_index = (block_offset / WII_SECTOR_SIZE) as usize;
-            if usage_index < self.usage_table.len() {
-                self.usage_table[usage_index] = true;
-            }
-
-            let read_len = std::cmp::min(usize::try_from(size)?, 0x7C00 - offset_in_block);
-            offset += read_len as u64;
-            size -= read_len as u64;
-        }
+        self.process_partition_data(part_offset, offset, size, false)?;
         Ok(())
     }
 
