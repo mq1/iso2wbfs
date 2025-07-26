@@ -34,53 +34,32 @@ fn main() {
 
     // Setup a single progress bar that we will manage across stages.
     let pb = ProgressBar::new(0); // Start with length 0
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+    pb.set_message("Scrubbing ISO (calculating used sectors)...");
     pb.enable_steady_tick(Duration::from_millis(100));
 
     // Define the closure that will handle progress updates.
-    let progress_callback = |update: ProgressUpdate| {
-        match update {
-            ProgressUpdate::ScrubbingStart => {
-                pb.set_style(
-                    ProgressStyle::default_spinner()
-                        .template("{spinner:.green} [{elapsed_precise}] {wide_msg}")
-                        .unwrap(),
-                );
-                pb.set_message("Building disc usage table (scrubbing)...");
-            }
-            ProgressUpdate::ScrubbingUpdate {
-                current_entry,
-                total_entries,
-            } => {
-                // On first update, switch to a bar and set the length
-                if pb.length().unwrap_or(0) != u64::from(total_entries) {
-                    pb.set_style(
-                        ProgressStyle::default_bar()
-                            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {wide_msg}")
-                            .unwrap()
-                            .progress_chars("#+-"),
-                    );
-                    pb.set_length(u64::from(total_entries));
-                    pb.set_message("Scrubbing...");
-                }
-                pb.set_position(u64::from(current_entry));
-            }
-            ProgressUpdate::ConversionStart { total_blocks } => {
-                pb.set_style(
-                    ProgressStyle::default_bar()
-                        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {wide_msg}")
-                        .unwrap()
-                        .progress_chars("#+-"),
-                );
-                pb.set_length(total_blocks);
-                pb.set_position(0);
-                pb.set_message("Converting ISO to WBFS format...");
-            }
-            ProgressUpdate::ConversionUpdate { current_block } => {
-                pb.set_position(current_block);
-            }
-            ProgressUpdate::Done => {
-                pb.finish_with_message("Conversion complete!");
-            }
+    let progress_callback = |update: ProgressUpdate| match update {
+        ProgressUpdate::ConversionStart { total_blocks } => {
+            pb.set_length(total_blocks);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                    .unwrap()
+                    .progress_chars("#+-"),
+            );
+            pb.set_message("Converting");
+            pb.set_position(0);
+        }
+        ProgressUpdate::ConversionUpdate { current_block } => {
+            pb.set_position(current_block);
+        }
+        ProgressUpdate::Done => {
+            pb.finish_with_message("Conversion complete!");
         }
     };
 
