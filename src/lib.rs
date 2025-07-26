@@ -222,8 +222,10 @@ impl WbfsConverter {
         part_offset: u64,
         mut offset: u64,
         mut size: u64,
-    ) -> Result<Vec<u8>, WbfsError> {
-        let mut data = Vec::with_capacity(usize::try_from(size)?);
+        output_buf: &mut Vec<u8>,
+    ) -> Result<(), WbfsError> {
+        output_buf.clear();
+        output_buf.reserve(usize::try_from(size)?);
 
         while size > 0 {
             let block_index = offset / 0x7C00;
@@ -242,12 +244,12 @@ impl WbfsConverter {
             Self::aes_decrypt(&self.disc_key, &iv, &mut self.decrypted_buffer[..0x7C00])?;
 
             let read_len = std::cmp::min(usize::try_from(size)?, 0x7C00 - offset_in_block);
-            data.extend_from_slice(&self.decrypted_buffer[offset_in_block..offset_in_block + read_len]);
+            output_buf.extend_from_slice(&self.decrypted_buffer[offset_in_block..offset_in_block + read_len]);
 
             offset += read_len as u64;
             size -= read_len as u64;
         }
-        Ok(data)
+        Ok(())
     }
 
     fn mark_used_sectors(
@@ -273,15 +275,6 @@ impl WbfsConverter {
             size -= read_len as u64;
         }
         Ok(())
-    }
-
-    fn read_iso_partition_data(
-        &mut self,
-        part_offset: u64,
-        offset: u64,
-        size: u64,
-    ) -> Result<Vec<u8>, WbfsError> {
-        self.read_and_decrypt_partition_data(part_offset, offset, size)
     }
 
     fn traverse_fst(
@@ -312,6 +305,40 @@ impl WbfsConverter {
         Ok(())
     }
 
+    fn process_partition(&mut self, part_offset: u64, part_type: u32, i: u32) -> Result<(), WbfsError> {
+        info!(
+            "Analyzing Partition {i}: type={part_type}, offset={part_offset:#x}"
+        );
+
+        let ticket = self.read_iso_data(part_offset, PARTITION_TICKET_SIZE)?.to_vec();
+        self.disc_key = Self::decrypt_title_key(&ticket)?;
+        debug!(
+            "Decrypted Disc Key for partition {}: {}",
+            i,
+            hex::encode(self.disc_key)
+        );
+
+        let part_header = self.read_iso_data(part_offset + PARTITION_TICKET_SIZE as u64, PARTITION_HEADER_SIZE)?.to_vec();
+        self.part_data_offset =
+            u64::from(u32::from_be_bytes(part_header[PARTITION_DATA_OFFSET_IN_HEADER..PARTITION_DATA_OFFSET_IN_HEADER + 4].try_into()?)) * 4;
+
+        let mut part_main_header = Vec::new();
+        self.read_and_decrypt_partition_data(part_offset, 0, PARTITION_MAIN_HEADER_SIZE, &mut part_main_header)?;
+
+        let fst_offset =
+            u64::from(u32::from_be_bytes(part_main_header[FST_OFFSET_IN_PARTITION_HEADER..FST_OFFSET_IN_PARTITION_HEADER + 4].try_into()?)) * 4;
+        let fst_size =
+            u64::from(u32::from_be_bytes(part_main_header[FST_OFFSET_IN_PARTITION_HEADER + 4..FST_OFFSET_IN_PARTITION_HEADER + 8].try_into()?)) * 4;
+
+        debug!(
+            "FST located at offset {fst_offset:#x} with size {fst_size:#x}"
+        );
+        let mut fst_data = Vec::new();
+        self.read_and_decrypt_partition_data(part_offset, fst_offset, fst_size, &mut fst_data)?;
+        self.traverse_fst(part_offset, &fst_data)?;
+        Ok(())
+    }
+
     fn build_disc_usage_table(&mut self) -> Result<(), WbfsError> {
         info!("Building disc usage table (scrubbing)...");
         self.usage_table[0] = true;
@@ -336,33 +363,7 @@ impl WbfsConverter {
             )) * 4;
             let part_type =
                 u32::from_be_bytes(part_info_data[offset + 4..offset + 8].try_into()?);
-            info!(
-                "Analyzing Partition {i}: type={part_type}, offset={part_offset:#x}"
-            );
-
-            let ticket = self.read_iso_data(part_offset, PARTITION_TICKET_SIZE)?.to_vec();
-            self.disc_key = Self::decrypt_title_key(&ticket)?;
-            debug!(
-                "Decrypted Disc Key for partition {}: {}",
-                i,
-                hex::encode(self.disc_key)
-            );
-
-            let part_header = self.read_iso_data(part_offset + PARTITION_TICKET_SIZE as u64, PARTITION_HEADER_SIZE)?.to_vec();
-            self.part_data_offset =
-                u64::from(u32::from_be_bytes(part_header[PARTITION_DATA_OFFSET_IN_HEADER..PARTITION_DATA_OFFSET_IN_HEADER + 4].try_into()?)) * 4;
-
-            let part_main_header = self.read_iso_partition_data(part_offset, 0, PARTITION_MAIN_HEADER_SIZE)?;
-            let fst_offset =
-                u64::from(u32::from_be_bytes(part_main_header[FST_OFFSET_IN_PARTITION_HEADER..FST_OFFSET_IN_PARTITION_HEADER + 4].try_into()?)) * 4;
-            let fst_size =
-                u64::from(u32::from_be_bytes(part_main_header[FST_OFFSET_IN_PARTITION_HEADER + 4..FST_OFFSET_IN_PARTITION_HEADER + 8].try_into()?)) * 4;
-
-            debug!(
-                "FST located at offset {fst_offset:#x} with size {fst_size:#x}"
-            );
-            let fst_data = self.read_iso_partition_data(part_offset, fst_offset, fst_size)?;
-            self.traverse_fst(part_offset, &fst_data)?;
+            self.process_partition(part_offset, part_type, i)?;
         }
         Ok(())
     }
