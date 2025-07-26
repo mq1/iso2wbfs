@@ -47,6 +47,11 @@ pub enum WbfsError {
 pub enum ProgressUpdate {
     /// Indicates the scrubbing process has started.
     ScrubbingStart,
+    /// Reports progress during the scrubbing process.
+    ScrubbingUpdate {
+        current_entry: u32,
+        total_entries: u32,
+    },
     /// Indicates the main conversion has started, providing the total number of blocks.
     ConversionStart { total_blocks: u64 },
     /// Reports progress during the main conversion.
@@ -262,11 +267,23 @@ impl WbfsConverter {
         Ok(data)
     }
 
-    fn traverse_fst(&mut self, part_offset: u64, fst_data: &[u8]) -> Result<(), WbfsError> {
+    fn traverse_fst(
+        &mut self,
+        part_offset: u64,
+        fst_data: &[u8],
+        progress_callback: Option<&impl Fn(ProgressUpdate)>,
+    ) -> Result<(), WbfsError> {
         let num_entries = u32::from_be_bytes(fst_data[8..12].try_into().unwrap());
         debug!("FST has {num_entries} entries.");
 
         for i in 1..num_entries {
+            if let Some(cb) = &progress_callback {
+                cb(ProgressUpdate::ScrubbingUpdate {
+                    current_entry: i,
+                    total_entries: num_entries,
+                });
+            }
+
             let entry_offset = (i * 12) as usize;
             let entry = &fst_data[entry_offset..entry_offset + 12];
             let is_dir = entry[0] == 1;
@@ -285,7 +302,10 @@ impl WbfsConverter {
         Ok(())
     }
 
-    fn build_disc_usage_table(&mut self) -> Result<(), WbfsError> {
+    fn build_disc_usage_table(
+        &mut self,
+        progress_callback: Option<&impl Fn(ProgressUpdate)>,
+    ) -> Result<(), WbfsError> {
         info!("Building disc usage table (scrubbing)...");
         self.usage_table[0] = true;
         self.usage_table[(0x40000 / WII_SECTOR_SIZE) as usize] = true;
@@ -335,7 +355,7 @@ impl WbfsConverter {
                 "FST located at offset {fst_offset:#x} with size {fst_size:#x}"
             );
             let fst_data = self.read_iso_partition_data(part_offset, fst_offset, fst_size)?;
-            self.traverse_fst(part_offset, &fst_data)?;
+            self.traverse_fst(part_offset, &fst_data, progress_callback)?;
         }
         Ok(())
     }
@@ -357,7 +377,7 @@ impl WbfsConverter {
         if let Some(cb) = &progress_callback {
             cb(ProgressUpdate::ScrubbingStart);
         }
-        self.build_disc_usage_table()?;
+        self.build_disc_usage_table(progress_callback)?;
 
         // --- Stage 2: Conversion ---
         let iso_header = self.read_iso_data(0, 0x100)?.to_vec();

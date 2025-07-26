@@ -42,17 +42,34 @@ fn main() {
             ProgressUpdate::ScrubbingStart => {
                 pb.set_style(
                     ProgressStyle::default_spinner()
-                    .template("{spinner:.green} [{elapsed_precise}] {wide_msg}")
-                    .unwrap(),
+                        .template("{spinner:.green} [{elapsed_precise}] {wide_msg}")
+                        .unwrap(),
                 );
                 pb.set_message("Building disc usage table (scrubbing)...");
+            }
+            ProgressUpdate::ScrubbingUpdate {
+                current_entry,
+                total_entries,
+            } => {
+                // On first update, switch to a bar and set the length
+                if pb.length().unwrap_or(0) != u64::from(total_entries) {
+                    pb.set_style(
+                        ProgressStyle::default_bar()
+                            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {wide_msg}")
+                            .unwrap()
+                            .progress_chars("#+-"),
+                    );
+                    pb.set_length(u64::from(total_entries));
+                    pb.set_message("Scrubbing...");
+                }
+                pb.set_position(u64::from(current_entry));
             }
             ProgressUpdate::ConversionStart { total_blocks } => {
                 pb.set_style(
                     ProgressStyle::default_bar()
-                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {wide_msg}")
-                    .unwrap()
-                    .progress_chars("#>-"),
+                        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {wide_msg}")
+                        .unwrap()
+                        .progress_chars("#+-"),
                 );
                 pb.set_length(total_blocks);
                 pb.set_position(0);
