@@ -21,7 +21,6 @@ const WII_COMMON_KEY: [u8; 16] = [
 ];
 const INVALID_PATH_CHARS: &[char] = &['/', '\\', ':', '|', '<', '>', '?', '*', '"', '\''];
 const MAX_WII_SECTORS: usize = 143_432 * 2; // Dual Layer
-const SINGLE_LAYER_WII_SECTORS: usize = 143_432;
 
 // --- ISO Offsets and Sizes ---
 const PARTITION_TABLE_OFFSET: u64 = 0x40000;
@@ -31,6 +30,9 @@ const PARTITION_TICKET_SIZE: usize = 0x2A4;
 const PARTITION_DATA_OFFSET_IN_HEADER: usize = 0x14;
 const PARTITION_MAIN_HEADER_SIZE: u64 = 0x480;
 const FST_OFFSET_IN_PARTITION_HEADER: usize = 0x424;
+const DOL_OFFSET_IN_PARTITION_HEADER: usize = 0x420;
+const H3_TABLE_OFFSET_IN_HEADER: usize = 0x10;
+const H3_TABLE_SIZE: u64 = 0x18000;
 
 // --- Custom Error Type ---
 #[derive(Error, Debug)]
@@ -217,6 +219,18 @@ impl WbfsConverter {
         Ok(buffer)
     }
 
+    fn mark_iso_sectors_used(&mut self, offset: u64, size: u64) -> Result<(), WbfsError> {
+        let start_sector = (offset / WII_SECTOR_SIZE) as usize;
+        let end_sector = ((offset + size + WII_SECTOR_SIZE - 1) / WII_SECTOR_SIZE) as usize;
+
+        for i in start_sector..end_sector {
+            if i < self.usage_table.len() {
+                self.usage_table[i] = true;
+            }
+        }
+        Ok(())
+    }
+
     fn read_and_decrypt_partition_data(
         &mut self,
         part_offset: u64,
@@ -252,7 +266,7 @@ impl WbfsConverter {
         Ok(())
     }
 
-    fn mark_used_sectors(
+    fn mark_used_partition_sectors(
         &mut self,
         part_offset: u64,
         mut offset: u64,
@@ -265,10 +279,7 @@ impl WbfsConverter {
             let block_offset =
                 part_offset + self.part_data_offset + (block_index * WII_SECTOR_SIZE);
 
-            let usage_index = (block_offset / WII_SECTOR_SIZE) as usize;
-            if usage_index < self.usage_table.len() {
-                self.usage_table[usage_index] = true;
-            }
+            self.mark_iso_sectors_used(block_offset, WII_SECTOR_SIZE)?;
 
             let read_len = std::cmp::min(usize::try_from(size)?, 0x7C00 - offset_in_block);
             offset += read_len as u64;
@@ -294,8 +305,7 @@ impl WbfsConverter {
                 let file_offset = u32::from_be_bytes(entry[4..8].try_into()?);
                 let file_size = u32::from_be_bytes(entry[8..12].try_into()?);
 
-                // Mark sectors as used without reading/decrypting file data.
-                self.mark_used_sectors(
+                self.mark_used_partition_sectors(
                     part_offset,
                     u64::from(file_offset) * 4,
                     u64::from(file_size),
@@ -310,6 +320,9 @@ impl WbfsConverter {
             "Analyzing Partition {i}: type={part_type}, offset={part_offset:#x}"
         );
 
+        // Mark sectors for Ticket and Partition Header
+        self.mark_iso_sectors_used(part_offset, (PARTITION_TICKET_SIZE + PARTITION_HEADER_SIZE) as u64)?;
+
         let ticket = self.read_iso_data(part_offset, PARTITION_TICKET_SIZE)?.to_vec();
         self.disc_key = Self::decrypt_title_key(&ticket)?;
         debug!(
@@ -319,16 +332,30 @@ impl WbfsConverter {
         );
 
         let part_header = self.read_iso_data(part_offset + PARTITION_TICKET_SIZE as u64, PARTITION_HEADER_SIZE)?.to_vec();
-        self.part_data_offset =
-            u64::from(u32::from_be_bytes(part_header[PARTITION_DATA_OFFSET_IN_HEADER..PARTITION_DATA_OFFSET_IN_HEADER + 4].try_into()?)) * 4;
+        let tmd_size = u64::from(u32::from_be_bytes(part_header[0..4].try_into()?));
+        let tmd_offset = u64::from(u32::from_be_bytes(part_header[4..8].try_into()?)) * 4;
+        let cert_chain_size = u64::from(u32::from_be_bytes(part_header[8..12].try_into()?));
+        let cert_chain_offset = u64::from(u32::from_be_bytes(part_header[12..16].try_into()?)) * 4;
+        let h3_offset = u64::from(u32::from_be_bytes(part_header[H3_TABLE_OFFSET_IN_HEADER..H3_TABLE_OFFSET_IN_HEADER+4].try_into()?)) * 4;
+        self.part_data_offset = u64::from(u32::from_be_bytes(part_header[PARTITION_DATA_OFFSET_IN_HEADER..PARTITION_DATA_OFFSET_IN_HEADER + 4].try_into()?)) * 4;
 
+        // Mark sectors for TMD, Certificate Chain, and H3 Table
+        self.mark_iso_sectors_used(part_offset + tmd_offset, tmd_size)?;
+        self.mark_iso_sectors_used(part_offset + cert_chain_offset, cert_chain_size)?;
+        self.mark_iso_sectors_used(part_offset + h3_offset, H3_TABLE_SIZE)?;
+
+        // Mark sectors for the decrypted partition data header
+        self.mark_used_partition_sectors(part_offset, 0, PARTITION_MAIN_HEADER_SIZE)?;
         let mut part_main_header = Vec::new();
         self.read_and_decrypt_partition_data(part_offset, 0, PARTITION_MAIN_HEADER_SIZE, &mut part_main_header)?;
 
-        let fst_offset =
-            u64::from(u32::from_be_bytes(part_main_header[FST_OFFSET_IN_PARTITION_HEADER..FST_OFFSET_IN_PARTITION_HEADER + 4].try_into()?)) * 4;
-        let fst_size =
-            u64::from(u32::from_be_bytes(part_main_header[FST_OFFSET_IN_PARTITION_HEADER + 4..FST_OFFSET_IN_PARTITION_HEADER + 8].try_into()?)) * 4;
+        let dol_offset = u64::from(u32::from_be_bytes(part_main_header[DOL_OFFSET_IN_PARTITION_HEADER..DOL_OFFSET_IN_PARTITION_HEADER + 4].try_into()?)) * 4;
+        let fst_offset = u64::from(u32::from_be_bytes(part_main_header[FST_OFFSET_IN_PARTITION_HEADER..FST_OFFSET_IN_PARTITION_HEADER + 4].try_into()?)) * 4;
+        let fst_size = u64::from(u32::from_be_bytes(part_main_header[FST_OFFSET_IN_PARTITION_HEADER + 4..FST_OFFSET_IN_PARTITION_HEADER + 8].try_into()?)) * 4;
+
+        // Mark sectors for DOL and FST
+        self.mark_used_partition_sectors(part_offset, dol_offset, fst_offset - dol_offset)?;
+        self.mark_used_partition_sectors(part_offset, fst_offset, fst_size)?;
 
         debug!(
             "FST located at offset {fst_offset:#x} with size {fst_size:#x}"
@@ -341,9 +368,9 @@ impl WbfsConverter {
 
     fn build_disc_usage_table(&mut self) -> Result<(), WbfsError> {
         info!("Building disc usage table (scrubbing)...");
-        self.usage_table[0] = true;
-        self.usage_table[(PARTITION_TABLE_OFFSET / WII_SECTOR_SIZE) as usize] = true;
-        self.usage_table[(0x4E000 / WII_SECTOR_SIZE) as usize] = true;
+        self.mark_iso_sectors_used(0, WII_SECTOR_SIZE)?; // Boot sector
+        self.mark_iso_sectors_used(PARTITION_TABLE_OFFSET, WII_SECTOR_SIZE)?; // Partition table
+        self.mark_iso_sectors_used(0x4E000, WII_SECTOR_SIZE)?; // Region info
 
         let part_table_info = self.read_iso_data(PARTITION_TABLE_OFFSET, PARTITION_INFO_SIZE)?.to_vec();
         let num_partitions = u32::from_be_bytes(part_table_info[0..4].try_into()?);
@@ -404,18 +431,8 @@ impl WbfsConverter {
         let wbfs_sec_sz_s = wbfs_block_size_shift + 15;
         let wbfs_sec_sz = 1u64 << wbfs_sec_sz_s;
 
-        // --- FIX: Determine accurate number of blocks to process ---
-        let last_used_wii_sector = self.usage_table.iter().rposition(|&used| used).unwrap_or(0);
-        let single_layer_wbfs_blocks = SINGLE_LAYER_WII_SECTORS >> wbfs_block_size_shift;
-
-        let total_blocks_to_process = if last_used_wii_sector < SINGLE_LAYER_WII_SECTORS {
-            debug!("Single-layer disc detected. Processing {single_layer_wbfs_blocks} blocks.");
-            single_layer_wbfs_blocks
-        } else {
-            let dual_layer_wbfs_blocks = MAX_WII_SECTORS >> wbfs_block_size_shift;
-            debug!("Dual-layer disc detected. Processing {dual_layer_wbfs_blocks} blocks.");
-            dual_layer_wbfs_blocks
-        };
+        let total_blocks_to_process = MAX_WII_SECTORS >> wbfs_block_size_shift;
+        debug!("Processing {total_blocks_to_process} blocks for dual-layer compatibility.");
 
         let mut disc_info = vec![0u8; 0x100 + (MAX_WII_SECTORS >> wbfs_block_size_shift) * 2];
         disc_info[..0x100].copy_from_slice(&iso_header);
@@ -427,9 +444,9 @@ impl WbfsConverter {
 
         for i in 0..total_blocks_to_process {
             let start_sec = i * wii_sec_per_wbfs_sec;
-            let end_sec = start_sec + wii_sec_per_wbfs_sec - 1;
+            let end_sec = start_sec + wii_sec_per_wbfs_sec;
             let mut used = false;
-            for k in start_sec..=end_sec {
+            for k in start_sec..std::cmp::min(end_sec, MAX_WII_SECTORS) {
                 if self.usage_table[k] {
                     used = true;
                     break;
