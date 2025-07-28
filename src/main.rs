@@ -12,7 +12,7 @@ use std::path::PathBuf;
 struct Args {
     /// Path to the input Wii ISO file.
     #[arg()]
-    iso_path: PathBuf,
+    iso_or_wbfs_path: PathBuf,
 
     /// Directory to save the WBFS file(s). Will be created if it doesn't exist.
     #[arg()]
@@ -32,10 +32,10 @@ fn main() -> Result<()> {
 
     info!(
         "Starting conversion for: {}",
-        args.iso_path.display()
+        args.iso_or_wbfs_path.display()
     );
 
-    let mut converter = WbfsConverter::new(&args.iso_path, &args.output_dir)?;
+    let converter = WbfsConverter::new(&args.iso_or_wbfs_path, &args.output_dir)?;
     converter.convert()?;
 
     Ok(())
