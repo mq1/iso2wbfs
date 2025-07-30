@@ -1,0 +1,1537 @@
+Project Path: rvz-1.0.3
+
+Source Tree:
+
+```txt
+rvz-1.0.3
+├── README.md
+├── cmd
+│   └── rvz
+│       └── main.go
+├── go.mod
+├── internal
+│   ├── lzma
+│   │   └── reader.go
+│   ├── lzma2
+│   │   └── reader.go
+│   ├── packed
+│   │   └── reader.go
+│   ├── padding
+│   │   └── reader.go
+│   ├── util
+│   │   └── util.go
+│   └── zstd
+│       └── reader.go
+├── part.go
+├── raw.go
+├── reader.go
+├── reader_test.go
+└── register.go
+
+```
+
+`rvz-1.0.3/README.md`:
+
+```md
+[![GitHub release](https://img.shields.io/github/v/release/bodgit/rvz)](https://github.com/bodgit/rvz/releases)
+[![Build Status](https://img.shields.io/github/workflow/status/bodgit/rvz/build)](https://github.com/bodgit/rvz/actions?query=workflow%3Abuild)
+[![Coverage Status](https://coveralls.io/repos/github/bodgit/rvz/badge.svg?branch=main)](https://coveralls.io/github/bodgit/rvz?branch=main)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bodgit/rvz)](https://goreportcard.com/report/github.com/bodgit/rvz)
+[![GoDoc](https://godoc.org/github.com/bodgit/rvz?status.svg)](https://godoc.org/github.com/bodgit/rvz)
+![Go version](https://img.shields.io/badge/Go-1.19-brightgreen.svg)
+![Go version](https://img.shields.io/badge/Go-1.18-brightgreen.svg)
+
+# Dolphin RVZ disc images
+
+The [github.com/bodgit/rvz](https://github.com/bodgit/rvz) package reads the [RVZ disc image format](https://github.com/dolphin-emu/dolphin/blob/master/docs/WiaAndRvz.md) used by the [Dolphin emulator](https://dolphin-emu.org).
+
+* Handles all supported compression methods; Zstandard is only marginally slower to read than no compression. Bzip2, LZMA, and LZMA2 are noticeably slower.
+
+How to read a disc image:
+```golang
+package main
+
+import (
+	"io"
+	"os"
+
+	"github.com/bodgit/rvz"
+)
+
+func main() {
+	f, err := os.Open("image.rvz")
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	r, err := rvz.NewReader(f)
+	if err != nil {
+		panic(err)
+	}
+
+	w, err := os.Create("image.iso")
+	if err != nil {
+		panic(err)
+	}
+	defer w.Close()
+
+	if _, err = io.Copy(w, r); err != nil {
+		panic(err)
+	}
+}
+```
+
+## rvz
+
+The `rvz` utility currently allows you to decompress an `.rvz` file back to its original `.iso` format.
+
+A quick demo:
+
+<img src="./rvz.svg">
+
+```
+
+`rvz-1.0.3/cmd/rvz/main.go`:
+
+```go
+package main
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"os"
+
+	"github.com/bodgit/rvz"
+	"github.com/schollz/progressbar/v3"
+	"github.com/urfave/cli/v2"
+)
+
+var (
+	version = "dev"
+	commit  = "none"    //nolint:gochecknoglobals
+	date    = "unknown" //nolint:gochecknoglobals
+)
+
+//nolint:gochecknoinits
+func init() {
+	cli.VersionFlag = &cli.BoolFlag{
+		Name:    "version",
+		Aliases: []string{"V"},
+		Usage:   "print the version",
+	}
+}
+
+func decompress(c *cli.Context) error {
+	if c.NArg() < 1 {
+		cli.ShowCommandHelpAndExit(c, c.Command.FullName(), 1)
+	}
+
+	f, err := os.Open(c.Args().First())
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	r, err := rvz.NewReader(f)
+	if err != nil {
+		return err
+	}
+
+	var w io.Writer
+
+	if c.NArg() >= 2 {
+		w, err = os.Create(c.Args().Get(1))
+		if err != nil {
+			return err
+		}
+		defer w.(io.Closer).Close() //nolint:forcetypeassert
+	} else {
+		w = os.Stdout
+	}
+
+	if c.Bool("verbose") {
+		pb := progressbar.DefaultBytes(r.Size())
+		w = io.MultiWriter(w, pb)
+	}
+
+	_, err = io.Copy(w, r)
+
+	return err
+}
+
+func main() {
+	app := cli.NewApp()
+
+	app.Name = "rvz"
+	app.Usage = "RVZ utility"
+	app.Version = fmt.Sprintf("%s, commit %s, built at %s", version, commit, date)
+
+	app.Commands = []*cli.Command{
+		{
+			Name:        "decompress",
+			Usage:       "Decompress RVZ image",
+			Description: "Decompress RVZ image",
+			ArgsUsage:   "SOURCE [TARGET]",
+			Flags: []cli.Flag{
+				&cli.BoolFlag{
+					Name:    "verbose",
+					Aliases: []string{"v"},
+					Usage:   "increase verbosity",
+				},
+			},
+			Action: decompress,
+		},
+	}
+
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+```
+
+`rvz-1.0.3/go.mod`:
+
+```mod
+module github.com/bodgit/rvz
+
+go 1.18
+
+require (
+	github.com/bodgit/plumbing v1.3.0
+	github.com/bodgit/rom v0.0.0-20220525084135-9efc26c9fe33
+	github.com/klauspost/compress v1.15.12
+	github.com/schollz/progressbar/v3 v3.12.1
+	github.com/stretchr/testify v1.8.1
+	github.com/ulikunitz/xz v0.5.10
+	github.com/urfave/cli/v2 v2.23.5
+	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f
+)
+
+require (
+	github.com/andybalholm/brotli v1.0.4 // indirect
+	github.com/bodgit/sevenzip v1.2.2 // indirect
+	github.com/bodgit/windows v1.0.0 // indirect
+	github.com/connesc/cipherio v0.2.1 // indirect
+	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.0 // indirect
+	github.com/golang/mock v1.4.4 // indirect
+	github.com/hashicorp/errwrap v1.1.0 // indirect
+	github.com/hashicorp/go-multierror v1.1.1 // indirect
+	github.com/mattn/go-runewidth v0.0.14 // indirect
+	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
+	github.com/nwaples/rardecode v1.1.3 // indirect
+	github.com/pierrec/lz4/v4 v4.1.14 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/rivo/uniseg v0.4.2 // indirect
+	github.com/russross/blackfriday/v2 v2.1.0 // indirect
+	github.com/uwedeportivo/torrentzip v1.0.0 // indirect
+	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
+	go4.org v0.0.0-20201209231011-d4a079459e60 // indirect
+	golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2 // indirect
+	golang.org/x/sys v0.1.0 // indirect
+	golang.org/x/term v0.1.0 // indirect
+	golang.org/x/text v0.3.7 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+```
+
+`rvz-1.0.3/internal/lzma/reader.go`:
+
+```go
+package lzma
+
+import (
+	"bytes"
+	"encoding/binary"
+	"io"
+
+	"github.com/ulikunitz/xz/lzma"
+)
+
+const (
+	unknownSize uint64 = 1<<64 - 1
+)
+
+// NewReader returns a new LZMA io.ReadCloser.
+func NewReader(p []byte, reader io.Reader) (io.ReadCloser, error) {
+	b := bytes.NewBuffer(p)
+	_ = binary.Write(b, binary.LittleEndian, unknownSize)
+
+	r, err := lzma.NewReader(io.MultiReader(b, reader))
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(r), nil
+}
+
+```
+
+`rvz-1.0.3/internal/lzma2/reader.go`:
+
+```go
+package lzma2
+
+import (
+	"errors"
+	"io"
+
+	"github.com/ulikunitz/xz/lzma"
+)
+
+// NewReader returns a new LZMA2 io.ReadCloser.
+func NewReader(p []byte, reader io.Reader) (io.ReadCloser, error) {
+	if len(p) != 1 {
+		return nil, errors.New("lzma2: not enough properties")
+	}
+
+	config := lzma.Reader2Config{
+		DictCap: (2 | (int(p[0]) & 1)) << (p[0]/2 + 11),
+	}
+
+	if err := config.Verify(); err != nil {
+		return nil, err
+	}
+
+	r, err := config.NewReader2(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(r), nil
+}
+
+```
+
+`rvz-1.0.3/internal/packed/reader.go`:
+
+```go
+package packed
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"io"
+	"sync"
+
+	"github.com/bodgit/plumbing"
+	"github.com/bodgit/rvz/internal/padding"
+)
+
+const (
+	padded   uint32 = 1 << 31
+	sizeMask        = padded - 1
+)
+
+var pool sync.Pool //nolint:gochecknoglobals
+
+type readCloser struct {
+	rc     io.ReadCloser
+	src    io.ReadCloser
+	size   int64
+	buf    *bytes.Buffer
+	offset int64
+}
+
+func (rc *readCloser) nextReader() (err error) {
+	var size uint32
+	if err = binary.Read(rc.rc, binary.BigEndian, &size); err != nil {
+		return err
+	}
+
+	rc.size = int64(size & sizeMask)
+
+	if size&padded == padded {
+		nrc, err := padding.NewReadCloser(rc.rc, rc.offset)
+		if err != nil {
+			return err
+		}
+
+		rc.src = plumbing.LimitReadCloser(nrc, rc.size)
+	} else {
+		// Intentionally "hide" the underlying Close method
+		rc.src = io.NopCloser(io.LimitReader(rc.rc, rc.size))
+	}
+
+	return nil
+}
+
+func (rc *readCloser) read() (err error) {
+	for {
+		if rc.size == 0 {
+			if err = rc.nextReader(); err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+
+				return
+			}
+		}
+
+		var (
+			n         int64
+			remaining = int64(rc.buf.Cap() - rc.buf.Len())
+		)
+
+		if remaining >= rc.size {
+			n, err = io.Copy(rc.buf, rc.src)
+		} else {
+			n, err = io.CopyN(rc.buf, rc.src, remaining)
+		}
+
+		if err != nil {
+			return
+		}
+
+		rc.size -= n
+		rc.offset += n
+
+		if rc.size == 0 {
+			if err = rc.src.Close(); err != nil {
+				return
+			}
+
+			rc.src = nil
+		}
+
+		if rc.buf.Len() == rc.buf.Cap() {
+			break
+		}
+	}
+
+	return nil
+}
+
+func (rc *readCloser) Read(p []byte) (int, error) {
+	if err := rc.read(); err != nil && !errors.Is(err, io.EOF) {
+		return 0, err
+	}
+
+	return rc.buf.Read(p)
+}
+
+func (rc *readCloser) Close() (err error) {
+	pool.Put(rc.buf)
+
+	if rc.src != nil {
+		if err = rc.src.Close(); err != nil {
+			return
+		}
+	}
+
+	return rc.rc.Close()
+}
+
+// NewReadCloser returns a new io.ReadCloser that reads the RVZ packed stream
+// from the underlying io.ReadCloser rc. The offset of where this packed stream
+// starts relative to the beginning of the uncompressed disc image is also
+// required.
+func NewReadCloser(rc io.ReadCloser, offset int64) (io.ReadCloser, error) {
+	nrc := &readCloser{
+		rc:     rc,
+		offset: offset,
+	}
+
+	b, ok := pool.Get().(*bytes.Buffer)
+	if ok {
+		b.Reset()
+	} else {
+		b = new(bytes.Buffer)
+		b.Grow(1 << 16)
+	}
+
+	nrc.buf = b
+
+	return nrc, nil
+}
+
+```
+
+`rvz-1.0.3/internal/padding/reader.go`:
+
+```go
+package padding
+
+import (
+	"bytes"
+	"encoding/binary"
+	"io"
+	"sync"
+
+	"github.com/bodgit/rvz/internal/util"
+)
+
+const (
+	initialSize = 17
+	maximumSize = 521
+)
+
+//nolint:gochecknoglobals
+var prngPool, bufPool sync.Pool
+
+type readCloser struct {
+	prng []uint32
+	buf  *bytes.Buffer
+}
+
+func (rc *readCloser) advance() {
+	for i := range rc.prng {
+		rc.prng[i] ^= rc.prng[(i+len(rc.prng)-32)%len(rc.prng)]
+	}
+}
+
+func (rc *readCloser) Read(p []byte) (int, error) {
+	if rc.buf.Len() == 0 {
+		for _, x := range rc.prng {
+			_ = rc.buf.WriteByte(byte(0xff & (x >> 24)))
+			_ = rc.buf.WriteByte(byte(0xff & (x >> 18))) // not 16!
+			_ = rc.buf.WriteByte(byte(0xff & (x >> 8)))
+			_ = rc.buf.WriteByte(byte(0xff & (x)))
+		}
+
+		rc.advance()
+	}
+
+	return rc.buf.Read(p)
+}
+
+func (rc *readCloser) Close() error {
+	prngPool.Put(&rc.prng)
+	bufPool.Put(rc.buf)
+
+	return nil
+}
+
+// NewReadCloser returns an io.ReadCloser that generates a stream of GameCube
+// and Wii padding data. The PRNG is seeded from the io.Reader r. The offset of
+// where this padded stream starts relative to the beginning of the
+// uncompressed disc image or the partition is also required.
+func NewReadCloser(r io.Reader, offset int64) (io.ReadCloser, error) {
+	rc := new(readCloser)
+
+	p, ok := prngPool.Get().(*[]uint32)
+	if ok {
+		rc.prng = *p
+		rc.prng = rc.prng[:initialSize]
+	} else {
+		rc.prng = make([]uint32, initialSize, maximumSize)
+	}
+
+	if err := binary.Read(r, binary.BigEndian, rc.prng); err != nil {
+		return nil, err
+	}
+
+	rc.prng = rc.prng[:maximumSize]
+
+	b, ok := bufPool.Get().(*bytes.Buffer)
+	if ok {
+		b.Reset()
+	} else {
+		b = new(bytes.Buffer)
+		b.Grow(maximumSize << 2)
+	}
+
+	rc.buf = b
+
+	for i := initialSize; i < maximumSize; i++ {
+		rc.prng[i] = rc.prng[i-17]<<23 ^ rc.prng[i-16]>>9 ^ rc.prng[i-1]
+	}
+
+	for i := 0; i < 4; i++ {
+		rc.advance()
+	}
+
+	if _, err := io.CopyN(io.Discard, rc, offset%util.SectorSize); err != nil {
+		return nil, err
+	}
+
+	return rc, nil
+}
+
+```
+
+`rvz-1.0.3/internal/util/util.go`:
+
+```go
+package util
+
+const (
+	// SectorSize is the standard 32 KiB disc sector.
+	SectorSize = 0x8000
+)
+
+```
+
+`rvz-1.0.3/internal/zstd/reader.go`:
+
+```go
+package zstd
+
+import (
+	"io"
+	"runtime"
+	"sync"
+
+	"github.com/klauspost/compress/zstd"
+)
+
+//nolint:gochecknoglobals
+var zstdReaderPool sync.Pool
+
+type readCloser struct {
+	*zstd.Decoder
+}
+
+func (rc *readCloser) Close() error {
+	zstdReaderPool.Put(rc)
+
+	return nil
+}
+
+// NewReader returns a new Zstandard io.ReadCloser.
+func NewReader(_ []byte, reader io.Reader) (io.ReadCloser, error) {
+	var err error
+
+	r, ok := zstdReaderPool.Get().(*zstd.Decoder)
+	if ok {
+		if err = r.Reset(reader); err != nil {
+			return nil, err
+		}
+	} else {
+		if r, err = zstd.NewReader(reader); err != nil {
+			return nil, err
+		}
+		runtime.SetFinalizer(r, (*zstd.Decoder).Close)
+	}
+
+	return &readCloser{r}, nil
+}
+
+```
+
+`rvz-1.0.3/part.go`:
+
+```go
+package rvz
+
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha1" //nolint:gosec
+	"io"
+	"runtime"
+
+	"github.com/bodgit/plumbing"
+	"github.com/bodgit/rvz/internal/util"
+	"golang.org/x/sync/errgroup"
+)
+
+const (
+	subGroup         = 8
+	clusters         = subGroup * subGroup // 8 groups of 8 subgroups
+	blocksPerCluster = 31
+
+	h0Size    = blocksPerCluster * sha1.Size
+	h0Padding = 0x14
+	h1Size    = subGroup * sha1.Size
+	h1Padding = 0x20
+	h2Size    = h1Size
+	h2Padding = h1Padding
+	hashSize  = h0Size + h0Padding + h1Size + h1Padding + h2Size + h2Padding
+
+	blockSize = (util.SectorSize - hashSize) / blocksPerCluster
+
+	ivOffset = 0x03d0
+
+	groupSize = util.SectorSize * clusters // 2 MiB
+)
+
+func min(x, y int) int {
+	if x < y {
+		return x
+	}
+
+	return y
+}
+
+type partReader struct {
+	h0 [clusters]*bytes.Buffer
+	h1 [subGroup]io.Writer
+	h2 io.Writer
+
+	cluster [clusters]*bytes.Buffer
+
+	buf []byte
+	br  *bytes.Reader
+
+	p, d   int
+	r      *reader
+	sector int
+}
+
+func (pr *partReader) groupOffset(g int) int64 {
+	return (int64(g) - int64(pr.r.part[pr.p].Data[pr.d].GroupIndex)) * pr.r.disc.chunkSize(true)
+}
+
+func (pr *partReader) reset() {
+	for i := 0; i < clusters; i++ {
+		pr.h0[i].Reset()
+		pr.cluster[i].Reset()
+	}
+}
+
+func (pr *partReader) readGroup(i int) error {
+	ss := i * pr.r.disc.sectorsPerChunk()
+	g := pr.sectorToGroup(pr.sector + ss)
+
+	h := sha1.New() //nolint:gosec
+
+	split := min(ss+pr.r.disc.sectorsPerChunk(), int(pr.r.part[pr.p].Data[pr.d].NumSector)-pr.sector)
+	if split < ss {
+		split = ss
+	}
+
+	var (
+		rc  io.ReadCloser
+		err error
+		zr  = plumbing.DevZero()
+		r   io.Reader
+	)
+
+	if split > ss {
+		rc, _, err = pr.r.groupReader(g, pr.groupOffset(g), true)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+	}
+
+	for j := ss; j < ss+pr.r.disc.sectorsPerChunk(); j++ {
+		if j < split {
+			r = rc
+		} else {
+			r = zr
+		}
+
+		for k := 0; k < blocksPerCluster; k++ {
+			h.Reset()
+
+			if _, err := io.CopyN(pr.cluster[j], io.TeeReader(r, h), blockSize); err != nil {
+				return err
+			}
+
+			_, _ = pr.h0[j].Write(h.Sum(nil))
+		}
+
+		_, _ = io.CopyN(pr.h0[j], plumbing.DevZero(), h0Padding)
+	}
+
+	return nil
+}
+
+func (pr *partReader) writeHashes() {
+	h := sha1.New() //nolint:gosec
+
+	buf := make([]byte, hashSize)
+
+	// Calculate the H1 hashes
+	for i := 0; i < subGroup; i++ {
+		for j := 0; j < subGroup; j++ {
+			h.Reset()
+			_, _ = io.CopyBuffer(h, io.LimitReader(bytes.NewReader(pr.h0[i*subGroup+j].Bytes()), h0Size), buf)
+			_, _ = pr.h1[i].Write(h.Sum(nil))
+		}
+
+		_, _ = io.CopyN(pr.h1[i], plumbing.DevZero(), h1Padding)
+	}
+
+	// Calculate the H2 hashes
+	for i := 0; i < subGroup; i++ {
+		h.Reset()
+		_, _ = io.CopyBuffer(h,
+			io.NewSectionReader(bytes.NewReader(pr.h0[i*subGroup].Bytes()), h0Size+h0Padding, h1Size),
+			buf)
+		_, _ = pr.h2.Write(h.Sum(nil))
+	}
+
+	_, _ = io.CopyN(pr.h2, plumbing.DevZero(), h2Padding)
+}
+
+//nolint:gochecknoglobals
+var iv = make([]byte, aes.BlockSize) // 16 x 0x00
+
+func (pr *partReader) encryptSector(sector int) error {
+	block, err := aes.NewCipher(pr.r.part[pr.p].Key[:])
+	if err != nil {
+		return err
+	}
+
+	offset := sector * util.SectorSize
+
+	e := cipher.NewCBCEncrypter(block, iv)
+	e.CryptBlocks(pr.buf[offset:], pr.h0[sector].Bytes())
+
+	e = cipher.NewCBCEncrypter(block, pr.buf[offset+ivOffset:offset+ivOffset+aes.BlockSize])
+	e.CryptBlocks(pr.buf[offset+hashSize:], pr.cluster[sector].Bytes())
+
+	return nil
+}
+
+func (pr *partReader) sectorToGroup(sector int) int {
+	return int(pr.r.part[pr.p].Data[pr.d].GroupIndex) + sector/(int(pr.r.disc.ChunkSize)/util.SectorSize)
+}
+
+func (pr *partReader) read() (err error) {
+	eg := new(errgroup.Group)
+	eg.SetLimit(runtime.NumCPU())
+
+	pr.reset()
+
+	for i := 0; i < groupSize/int(pr.r.disc.ChunkSize); i++ {
+		i := i
+
+		eg.Go(func() error {
+			return pr.readGroup(i)
+		})
+	}
+
+	if err = eg.Wait(); err != nil {
+		return
+	}
+
+	pr.writeHashes()
+
+	sectors := min(clusters, int(pr.r.part[pr.p].Data[pr.d].NumSector)-pr.sector)
+
+	pr.buf = pr.buf[:(sectors * util.SectorSize)]
+
+	for i := 0; i < sectors; i++ {
+		i := i
+
+		eg.Go(func() error {
+			return pr.encryptSector(i)
+		})
+	}
+
+	if err = eg.Wait(); err != nil {
+		return
+	}
+
+	return nil
+}
+
+func (pr *partReader) Read(p []byte) (n int, err error) {
+	if pr.br.Len() == 0 {
+		if pr.sector == int(pr.r.part[pr.p].Data[pr.d].NumSector) {
+			return 0, io.EOF
+		}
+
+		if err = pr.read(); err != nil {
+			return
+		}
+
+		pr.br.Reset(pr.buf)
+
+		pr.sector += pr.br.Len() / util.SectorSize
+	}
+
+	n, err = pr.br.Read(p)
+
+	return
+}
+
+func newPartReader(r *reader, p, d int) io.Reader {
+	pr := &partReader{
+		p: p,
+		d: d,
+		r: r,
+	}
+
+	pr.buf = make([]byte, 0, groupSize) // 2 MiB
+	pr.br = bytes.NewReader(pr.buf)
+
+	h1 := make([][]io.Writer, subGroup)
+	for i := range h1 {
+		h1[i] = make([]io.Writer, 0, subGroup)
+	}
+
+	for i := range pr.h0 {
+		pr.h0[i] = new(bytes.Buffer)
+		pr.h0[i].Grow(hashSize) // 0x400
+
+		j := i / subGroup
+
+		h1[j] = append(h1[j], pr.h0[i])
+	}
+
+	for i := range pr.cluster {
+		pr.cluster[i] = new(bytes.Buffer)
+		pr.cluster[i].Grow(util.SectorSize - hashSize) // 0x7c00
+	}
+
+	for i := range pr.h1 {
+		pr.h1[i] = io.MultiWriter(h1[i]...)
+	}
+
+	pr.h2 = io.MultiWriter(pr.h1[:]...)
+
+	return pr
+}
+
+```
+
+`rvz-1.0.3/raw.go`:
+
+```go
+package rvz
+
+import (
+	"errors"
+	"io"
+)
+
+type rawReader struct {
+	i, g   int
+	r      *reader
+	gr     io.ReadCloser
+	offset int64
+}
+
+func (rr *rawReader) Read(p []byte) (n int, err error) {
+	if rr.offset == int64(rr.r.raw[rr.i].RawDataOff+rr.r.raw[rr.i].RawDataSize) {
+		return n, io.EOF
+	}
+
+	if rr.gr == nil {
+		if rr.gr, _, err = rr.r.groupReader(rr.g, rr.offset, false); err != nil {
+			return
+		}
+	}
+
+	n, err = rr.gr.Read(p)
+	rr.offset += int64(n)
+
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			return
+		}
+
+		if err = rr.gr.Close(); err != nil {
+			return
+		}
+
+		rr.g++
+
+		rr.gr, err = nil, nil
+	}
+
+	return
+}
+
+func newRawReader(r *reader, i int) io.Reader {
+	return &rawReader{
+		i:      i,
+		g:      int(r.raw[i].GroupIndex),
+		r:      r,
+		offset: int64(r.raw[i].RawDataOff),
+	}
+}
+
+```
+
+`rvz-1.0.3/reader.go`:
+
+```go
+package rvz
+
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/sha1" //nolint:gosec
+	"encoding/binary"
+	"errors"
+	"io"
+
+	"github.com/bodgit/plumbing"
+	"github.com/bodgit/rvz/internal/packed"
+	"github.com/bodgit/rvz/internal/util"
+)
+
+const (
+	// Extension is the conventional file extension used.
+	Extension = ".rvz"
+
+	rvzMagic uint32 = 0x52565a01 // 'R', 'V', 'Z', 0x01
+)
+
+const (
+	gameCube = iota + 1
+	wii
+)
+
+// A Reader has Read and Size methods.
+type Reader interface {
+	io.Reader
+	Size() int64
+}
+
+//nolint:maligned
+type header struct {
+	Magic             uint32
+	Version           uint32
+	VersionCompatible uint32
+	DiscSize          uint32
+	DiscHash          [sha1.Size]byte
+	IsoFileSize       uint64
+	RvzFileSize       uint64
+	FileHeadHash      [sha1.Size]byte
+}
+
+func (h *header) discReader(ra io.ReaderAt) io.Reader {
+	return io.NewSectionReader(ra, int64(binary.Size(h)), int64(h.DiscSize))
+}
+
+type disc struct {
+	DiscType     uint32
+	Compression  uint32
+	ComprLevel   int32
+	ChunkSize    uint32
+	Header       [0x80]byte
+	NumPart      uint32
+	PartSize     uint32
+	PartOff      uint64
+	PartHash     [sha1.Size]byte
+	NumRawData   uint32
+	RawDataOff   uint64
+	RawDataSize  uint32
+	NumGroup     uint32
+	GroupOff     uint64
+	GroupSize    uint32
+	ComprDataLen byte
+	ComprData    [7]byte
+}
+
+func (d *disc) partReader(ra io.ReaderAt) io.Reader {
+	return io.NewSectionReader(ra, int64(d.PartOff), int64(d.NumPart*d.PartSize))
+}
+
+func (d *disc) rawReader(ra io.ReaderAt) io.Reader {
+	return io.NewSectionReader(ra, int64(d.RawDataOff), int64(d.RawDataSize))
+}
+
+func (d *disc) groupReader(ra io.ReaderAt) io.Reader {
+	return io.NewSectionReader(ra, int64(d.GroupOff), int64(d.GroupSize))
+}
+
+func (d *disc) chunkSize(partition bool) int64 {
+	if partition {
+		return int64(d.ChunkSize) / util.SectorSize * (util.SectorSize - hashSize)
+	}
+
+	return int64(d.ChunkSize)
+}
+
+func (d *disc) sectorsPerChunk() int {
+	return int(d.ChunkSize) / util.SectorSize
+}
+
+type partData struct {
+	FirstSector uint32
+	NumSector   uint32
+	GroupIndex  uint32
+	NumGroup    uint32
+}
+
+type part struct {
+	Key  [aes.BlockSize]byte
+	Data [2]partData
+}
+
+type raw struct {
+	RawDataOff  uint64
+	RawDataSize uint64
+	GroupIndex  uint32
+	NumGroup    uint32
+}
+
+type group struct {
+	Offset     uint32
+	Size       uint32
+	PackedSize uint32
+}
+
+func (g *group) offset() int64 {
+	return int64(g.Offset << 2)
+}
+
+const (
+	compressed     uint32 = 1 << 31
+	compressedMask        = compressed - 1
+)
+
+func (g *group) compressed() bool {
+	return g.Size&compressed == compressed
+}
+
+func (g *group) size() int64 {
+	return int64(g.Size & compressedMask)
+}
+
+type except struct {
+	Offset uint16
+	Hash   [sha1.Size]byte
+}
+
+type reader struct {
+	ra io.ReaderAt
+
+	header header
+	disc   disc
+	part   []part
+	raw    []raw
+	group  []group
+
+	r      io.Reader
+	offset int64
+}
+
+func (r *reader) decompressor(reader io.Reader) (io.ReadCloser, error) {
+	dcomp := decompressor(r.disc.Compression)
+	if dcomp == nil {
+		return nil, errors.New("rvz: unsupported algorithm")
+	}
+
+	return dcomp(r.disc.ComprData[0:r.disc.ComprDataLen], reader)
+}
+
+//nolint:cyclop,unparam
+func (r *reader) groupReader(g int, offset int64, partition bool) (rc io.ReadCloser, exceptions []except, err error) {
+	group := r.group[g]
+
+	switch {
+	case group.compressed():
+		rc, err = r.decompressor(io.NewSectionReader(r.ra, group.offset(), group.size()))
+		if err != nil {
+			return nil, nil, err
+		}
+	case group.size() == 0:
+		rc = io.NopCloser(io.LimitReader(plumbing.DevZero(), r.disc.chunkSize(partition)))
+	default:
+		rc = io.NopCloser(io.NewSectionReader(r.ra, group.offset(), group.size()))
+	}
+
+	//nolint:nestif
+	if partition {
+		wc := new(plumbing.WriteCounter)
+		tr := io.TeeReader(rc, wc)
+
+		var numExceptions uint16
+		if err = binary.Read(tr, binary.BigEndian, &numExceptions); err != nil {
+			return nil, nil, err
+		}
+
+		if numExceptions > 0 {
+			return nil, nil, errors.New("TODO handle exceptions")
+		}
+
+		// No compression, data starts on the next 4 byte boundary
+		if !group.compressed() {
+			if _, err = io.CopyN(io.Discard, rc, (group.offset()+int64(wc.Count()))%4); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	if group.PackedSize != 0 {
+		rc, err = packed.NewReadCloser(rc, offset)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return rc, nil, nil
+}
+
+func (r *reader) nextReader() (err error) {
+	for i, x := range r.raw {
+		if r.offset == int64(x.RawDataOff) {
+			r.r = newRawReader(r, i)
+
+			return
+		}
+	}
+
+	for i, x := range r.part {
+		for j := range x.Data {
+			if r.offset == int64(x.Data[j].FirstSector*util.SectorSize) && x.Data[j].NumSector > 0 {
+				r.r = newPartReader(r, i, j)
+
+				return
+			}
+		}
+	}
+
+	return errors.New("rvz: cannot find reader")
+}
+
+func (r *reader) Read(p []byte) (n int, err error) {
+	if r.offset == int64(r.header.IsoFileSize) {
+		return 0, io.EOF
+	}
+
+	if r.r == nil {
+		if err = r.nextReader(); err != nil {
+			return
+		}
+	}
+
+	n, err = r.r.Read(p)
+	r.offset += int64(n)
+
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			return
+		}
+
+		r.r, err = nil, nil
+	}
+
+	return
+}
+
+func (r *reader) Size() int64 {
+	return int64(r.header.IsoFileSize)
+}
+
+func (r *reader) readRaw() error {
+	cr, err := r.decompressor(r.disc.rawReader(r.ra))
+	if err != nil {
+		return err
+	}
+	defer cr.Close()
+
+	r.raw = make([]raw, r.disc.NumRawData)
+	if err = binary.Read(cr, binary.BigEndian, &r.raw); err != nil {
+		return err
+	}
+
+	// Make sure every area starts on a sector boundary, which is mostly
+	// for the benefit of the area at the beginning of the disc
+	for i := range r.raw {
+		remain := r.raw[i].RawDataOff % util.SectorSize
+		r.raw[i].RawDataOff -= remain
+		r.raw[i].RawDataSize += remain
+	}
+
+	return nil
+}
+
+func (r *reader) readGroup() error {
+	cr, err := r.decompressor(r.disc.groupReader(r.ra))
+	if err != nil {
+		return err
+	}
+	defer cr.Close()
+
+	r.group = make([]group, r.disc.NumGroup)
+	if err = binary.Read(cr, binary.BigEndian, &r.group); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// NewReader returns a new io.Reader that reads and decompresses from ra.
+//
+//nolint:cyclop,funlen
+func NewReader(ra io.ReaderAt) (Reader, error) {
+	r := new(reader)
+	r.ra = ra
+
+	h := sha1.New() //nolint:gosec
+
+	size := int64(binary.Size(r.header)) - sha1.Size
+
+	// Create a reader that can read the whole struct, but the SHA1 hash at the end is excluded
+	mr := io.MultiReader(io.TeeReader(io.NewSectionReader(ra, 0, size), h), io.NewSectionReader(ra, size, sha1.Size))
+	if err := binary.Read(mr, binary.BigEndian, &r.header); err != nil {
+		return nil, err
+	}
+
+	if r.header.Magic != rvzMagic {
+		return nil, errors.New("rvz: bad magic")
+	}
+
+	if !bytes.Equal(r.header.FileHeadHash[:], h.Sum(nil)) {
+		return nil, errors.New("rvz: header hash doesn't match")
+	}
+
+	h.Reset()
+
+	if int(r.header.DiscSize) != binary.Size(r.disc) {
+		return nil, errors.New("rvz: disc struct has wrong size")
+	}
+
+	if err := binary.Read(io.TeeReader(r.header.discReader(ra), h), binary.BigEndian, &r.disc); err != nil {
+		return nil, err
+	}
+
+	if !bytes.Equal(r.header.DiscHash[:], h.Sum(nil)) {
+		return nil, errors.New("rvz: disc hash doesn't match")
+	}
+
+	switch r.disc.DiscType {
+	case gameCube:
+	case wii:
+		break
+	default:
+		return nil, errors.New("rvz: invalid disc type")
+	}
+
+	switch r.disc.ChunkSize {
+	case util.SectorSize << 0: //  32 KiB
+	case util.SectorSize << 1: //  64 KiB
+	case util.SectorSize << 2: // 128 KiB
+	case util.SectorSize << 3: // 256 KiB
+	case util.SectorSize << 4: // 512 KiB
+	case util.SectorSize << 5: //   1 MiB
+	case util.SectorSize << 6: //   2 MiB
+		break
+	default:
+		return nil, errors.New("rvz: bad chunk size")
+	}
+
+	h.Reset()
+
+	if r.disc.NumPart > 0 {
+		r.part = make([]part, r.disc.NumPart)
+		if int(r.disc.PartSize) != binary.Size(r.part[0]) {
+			return nil, errors.New("rvz: part struct has wrong size")
+		}
+
+		if err := binary.Read(io.TeeReader(r.disc.partReader(ra), h), binary.BigEndian, &r.part); err != nil {
+			return nil, err
+		}
+	}
+
+	if !bytes.Equal(r.disc.PartHash[:], h.Sum(nil)) {
+		return nil, errors.New("rvz: partition hash doesn't match")
+	}
+
+	if err := r.readRaw(); err != nil {
+		return nil, err
+	}
+
+	if err := r.readGroup(); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+```
+
+`rvz-1.0.3/reader_test.go`:
+
+```go
+package rvz_test
+
+import (
+	"crypto/sha1" //nolint:gosec
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/bodgit/rom/dat"
+	"github.com/bodgit/rvz"
+	"github.com/stretchr/testify/assert"
+)
+
+const (
+	gamecube = "Nintendo - GameCube - Datfile (1942) (2022-05-22 04-27-22).dat"
+	wii      = "Nintendo - Wii - Datfile (3647) (2022-01-07 22-05-54).dat"
+)
+
+//nolint:cyclop,funlen,gocognit
+func TestReader(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip()
+	}
+
+	tables := []struct {
+		name, dat, file string
+	}{
+		{
+			name: "GameCube",
+			dat:  gamecube,
+			file: "Gekkan Nintendo Tentou Demo 2003.9.1 (Japan)",
+		},
+		{
+			name: "Wii",
+			dat:  wii,
+			file: "Metal Slug Anthology (USA)",
+		},
+	}
+
+	for _, table := range tables {
+		table := table
+
+		t.Run(table.name, func(t *testing.T) {
+			t.Parallel()
+
+			b, err := os.ReadFile(filepath.Join("testdata", table.dat))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			d := new(dat.File)
+			if err := xml.Unmarshal(b, d); err != nil {
+				t.Fatal(err)
+			}
+
+			f, err := os.Open(filepath.Join("testdata", table.file+rvz.Extension))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+
+			r, err := rvz.NewReader(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			h := sha1.New() //nolint:gosec
+
+			if _, err := io.Copy(h, r); err != nil {
+				t.Fatal(err)
+			}
+
+			var g *dat.Game
+
+			for i := range d.Game {
+				if d.Game[i].Name == table.file {
+					g = &d.Game[i]
+
+					break
+				}
+			}
+
+			if g == nil || g.ROM[0].Name != table.file+".iso" {
+				t.Fatal(errors.New("no such disc"))
+			}
+
+			assert.Equal(t, fmt.Sprintf("%02x", h.Sum(nil)), strings.ToLower(g.ROM[0].SHA1))
+		})
+	}
+}
+
+func benchmarkReader(file string) error {
+	f, err := os.Open(filepath.Join("testdata", file))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	r, err := rvz.NewReader(f)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func BenchmarkReader(b *testing.B) {
+	for n := 0; n < b.N; n++ {
+		if err := benchmarkReader("Metal Slug Anthology (USA).rvz"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+```
+
+`rvz-1.0.3/register.go`:
+
+```go
+package rvz
+
+import (
+	"compress/bzip2"
+	"errors"
+	"io"
+	"sync"
+
+	"github.com/bodgit/rvz/internal/lzma"
+	"github.com/bodgit/rvz/internal/lzma2"
+	"github.com/bodgit/rvz/internal/zstd"
+)
+
+// Decompressor describes the function signature that decompression methods
+// must implement to return a new instance of themselves. They are passed any
+// property bytes and an io.Reader providing the stream of bytes.
+type Decompressor func([]byte, io.Reader) (io.ReadCloser, error)
+
+//nolint:gochecknoglobals
+var decompressors sync.Map
+
+//nolint:gochecknoinits
+func init() {
+	// None/Copy
+	RegisterDecompressor(0, Decompressor(func(_ []byte, r io.Reader) (io.ReadCloser, error) {
+		return io.NopCloser(r), nil
+	}))
+	// Purge. RVZ removed support for this algorithm from the original WIA format
+	RegisterDecompressor(1, Decompressor(func(_ []byte, _ io.Reader) (io.ReadCloser, error) {
+		return nil, errors.New("purge method not supported")
+	}))
+	// Bzip2
+	RegisterDecompressor(2, Decompressor(func(_ []byte, r io.Reader) (io.ReadCloser, error) {
+		return io.NopCloser(bzip2.NewReader(r)), nil
+	}))
+	// LZMA
+	RegisterDecompressor(3, Decompressor(lzma.NewReader))
+	// LZMA2
+	RegisterDecompressor(4, Decompressor(lzma2.NewReader))
+	// Zstandard
+	RegisterDecompressor(5, Decompressor(zstd.NewReader))
+}
+
+// RegisterDecompressor allows custom decompressors for the specified method.
+func RegisterDecompressor(method uint32, dcomp Decompressor) {
+	if _, dup := decompressors.LoadOrStore(method, dcomp); dup {
+		panic("decompressor already registered")
+	}
+}
+
+func decompressor(method uint32) Decompressor {
+	di, ok := decompressors.Load(method)
+	if !ok {
+		return nil
+	}
+
+	if d, ok := di.(Decompressor); ok {
+		return d
+	}
+
+	return nil
+}
+
+```

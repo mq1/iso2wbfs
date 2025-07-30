@@ -1,9 +1,9 @@
-Project Path: wbfs_file_2.9-master
+Project Path: wbfs_file-2.9
 
 Source Tree:
 
 ```txt
-wbfs_file_2.9-master
+wbfs_file-2.9
 ├── readme.txt
 └── source
     ├── Makefile
@@ -30,7 +30,7 @@ wbfs_file_2.9-master
 
 ```
 
-`wbfs_file_2.9-master/readme.txt`:
+`wbfs_file-2.9/readme.txt`:
 
 ```txt
 
@@ -401,7 +401,7 @@ Usage: wbfs_file.exe [OPTIONS] <DRIVE or FILENAME> [COMMAND [ARGS]]:
 
 ```
 
-`wbfs_file_2.9-master/source/Makefile`:
+`wbfs_file-2.9/source/Makefile`:
 
 ```
 PROGS = negentig scrub wbfs 
@@ -464,7 +464,7 @@ clean:
 
 ```
 
-`wbfs_file_2.9-master/source/bn.c`:
+`wbfs_file-2.9/source/bn.c`:
 
 ```c
 // Copyright 2007,2008  Segher Boessenkool  <segher@kernel.crashing.org>
@@ -593,7 +593,7 @@ void bn_inv(u8 *d, u8 *a, u8 *N, u32 n)
 
 ```
 
-`wbfs_file_2.9-master/source/disc_usage_table.c`:
+`wbfs_file-2.9/source/disc_usage_table.c`:
 
 ```c
 // Copyright 2007,2008  Segher Boessenkool  <segher@kernel.crashing.org>
@@ -873,7 +873,7 @@ int build_disc_usage_table(FILE* fp,u8*table, u64 offset)
 
 ```
 
-`wbfs_file_2.9-master/source/ec.c`:
+`wbfs_file-2.9/source/ec.c`:
 
 ```c
 // Copyright 2007,2008  Segher Boessenkool  <segher@kernel.crashing.org>
@@ -1251,7 +1251,7 @@ void ec_priv_to_pub(u8 *k, u8 *Q)
 
 ```
 
-`wbfs_file_2.9-master/source/libwbfs/libwbfs.c`:
+`wbfs_file-2.9/source/libwbfs/libwbfs.c`:
 
 ```c
 // Copyright 2009 Kwiirk
@@ -2045,7 +2045,7 @@ error:
 
 ```
 
-`wbfs_file_2.9-master/source/libwbfs/libwbfs.h`:
+`wbfs_file-2.9/source/libwbfs/libwbfs.h`:
 
 ```h
 #ifndef LIBWBFS_H
@@ -2280,7 +2280,7 @@ int read_wiidisc_wbfsdisc_errcheck(void *fp, u32 offset, u32 count, void *iobuf)
 
 ```
 
-`wbfs_file_2.9-master/source/libwbfs/libwbfs_linux.c`:
+`wbfs_file-2.9/source/libwbfs/libwbfs_linux.c`:
 
 ```c
 #ifdef __linux__
@@ -2450,7 +2450,7 @@ wbfs_t *wbfs_try_open(char *disc,char *partition, int reset)
 
 ```
 
-`wbfs_file_2.9-master/source/libwbfs/libwbfs_os.h`:
+`wbfs_file-2.9/source/libwbfs/libwbfs_os.h`:
 
 ```h
 #ifndef LIBWBFS_OS_H
@@ -2514,7 +2514,7 @@ inline static void*wbfs_ioallocx(size_t s, int line, const char *fun)
 
 ```
 
-`wbfs_file_2.9-master/source/libwbfs/libwbfs_osx.c`:
+`wbfs_file-2.9/source/libwbfs/libwbfs_osx.c`:
 
 ```c
 #ifdef __APPLE__
@@ -2685,7 +2685,7 @@ wbfs_t *wbfs_try_open(char *disc,char *partition, int reset)
 
 ```
 
-`wbfs_file_2.9-master/source/libwbfs/libwbfs_win32.c`:
+`wbfs_file-2.9/source/libwbfs/libwbfs_win32.c`:
 
 ```c
 #if defined(WIN32) || defined(__CYGWIN__)
@@ -3001,7 +3001,7 @@ wbfs_t *wbfs_try_open(char *disc, char *partition, int reset)
 
 ```
 
-`wbfs_file_2.9-master/source/libwbfs/wiidisc.c`:
+`wbfs_file-2.9/source/libwbfs/wiidisc.c`:
 
 ```c
 // Copyright 2009 Kwiirk based on negentig.c:
@@ -3363,7 +3363,7 @@ void wd_fix_partition_table(wiidisc_t *d, partition_selector_t selector, u8* par
 
 ```
 
-`wbfs_file_2.9-master/source/libwbfs/wiidisc.h`:
+`wbfs_file-2.9/source/libwbfs/wiidisc.h`:
 
 ```h
 #ifndef WIIDISC_H
@@ -3454,7 +3454,7 @@ void wd_fix_partition_table(wiidisc_t *d, partition_selector_t selector, u8* par
 
 ```
 
-`wbfs_file_2.9-master/source/negentig.c`:
+`wbfs_file-2.9/source/negentig.c`:
 
 ```c
 // Copyright 2007,2008  Segher Boessenkool  <segher@kernel.crashing.org>
@@ -4025,7 +4025,7 @@ int main(int argc, char **argv)
 
 ```
 
-`wbfs_file_2.9-master/source/platform.h`:
+`wbfs_file-2.9/source/platform.h`:
 
 ```h
 
@@ -4063,7 +4063,7 @@ FILE *fopen_dev(const char *filename, const char *mode);
 
 ```
 
-`wbfs_file_2.9-master/source/scrub.c`:
+`wbfs_file-2.9/source/scrub.c`:
 
 ```c
 // Copyright 2007,2008  Segher Boessenkool  <segher@kernel.crashing.org>
@@ -4123,7 +4123,7 @@ int main(int argc, char **argv)
 
 ```
 
-`wbfs_file_2.9-master/source/splits.c`:
+`wbfs_file-2.9/source/splits.c`:
 
 ```c
 // Copyright 2009 oggzee
@@ -4452,7 +4452,7 @@ int split_truncate(split_info_t *s, off64_t full_size)
 
 ```
 
-`wbfs_file_2.9-master/source/splits.h`:
+`wbfs_file-2.9/source/splits.h`:
 
 ```h
 // Copyright 2009 Kwiirk
@@ -4518,7 +4518,7 @@ void split_close(split_info_t *s);
 
 ```
 
-`wbfs_file_2.9-master/source/tools.c`:
+`wbfs_file-2.9/source/tools.c`:
 
 ```c
 // Copyright 2007,2008  Segher Boessenkool  <segher@kernel.crashing.org>
@@ -5038,7 +5038,7 @@ void spinner(u64 x, u64 max)
 
 ```
 
-`wbfs_file_2.9-master/source/tools.h`:
+`wbfs_file-2.9/source/tools.h`:
 
 ```h
 // Copyright 2007,2008  Segher Boessenkool  <segher@kernel.crashing.org>
@@ -5103,7 +5103,7 @@ void spinner(u64 x, u64 max);
 
 ```
 
-`wbfs_file_2.9-master/source/wbfs.c`:
+`wbfs_file-2.9/source/wbfs.c`:
 
 ```c
 // Copyright 2009 Kwiirk
