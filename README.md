@@ -17,3 +17,11 @@ Compile the example Rust cli implementation with:
 ```
 cargo run --release --features=cli -- ./input.iso ./out_dir
 ```
+
+# Licenses
+
+This project is distributed under the [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) license.
+
+wbfs_file 2.9 is distributed under the [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) license.
+
+rvz-1.0.3 is distributed under the [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) license.
