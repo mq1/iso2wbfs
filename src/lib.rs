@@ -8,14 +8,17 @@ use std::path::{Path, PathBuf};
 
 use log::{debug, error, info};
 use thiserror::Error;
+// Use constants from nod to reduce duplication and improve robustness.
+use nod::{DL_DVD_SIZE, SECTOR_SIZE};
 
 // --- Constants ---
-const WII_SECTOR_SIZE: u64 = 0x8000; // 32 KB
-const SECTOR_DATA_SIZE: u64 = 0x7C00; // 31 KB
+const WII_SECTOR_SIZE: u64 = SECTOR_SIZE as u64;
+const MAX_WII_SECTORS: usize = (DL_DVD_SIZE / WII_SECTOR_SIZE) as usize;
+// SECTOR_DATA_SIZE is the size of a Wii sector excluding the SHA-1 hash area (0x8000 - 0x400).
+const SECTOR_DATA_SIZE: u64 = (SECTOR_SIZE - 0x400) as u64;
 const WBFS_MAGIC: u32 = 0x5742_4653; // "WBFS"
 const SPLIT_SIZE_4GB_MINUS_32KB: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
 const INVALID_PATH_CHARS: &[char] = &['/', '\\', ':', '|', '<', '>', '?', '*', '"', '\''];
-const MAX_WII_SECTORS: usize = 143_432 * 2; // Dual Layer
 const PARTITION_MAIN_HEADER_SIZE: u64 = 0x480;
 const WBFS_HEADER_SECTOR_SIZE: u64 = 512;
 const WBFS_DISC_HEADER_SIZE: usize = 0x100;
@@ -144,7 +147,6 @@ pub struct WbfsConverter {
 }
 
 impl WbfsConverter {
-    /// Creates a new `WbfsConverter` instance.
     pub fn new(
         input_path: impl AsRef<Path>,
         output_dir: impl AsRef<Path>,
@@ -155,10 +157,6 @@ impl WbfsConverter {
         })
     }
 
-    /// The main conversion method.
-    ///
-    /// Converts the input file to a split WBFS format. It supports any Wii
-    /// disc format readable by the `nod` library (ISO, WBFS, WIA, RVZ, etc.).
     pub fn convert(&self) -> Result<(), WbfsError> {
         info!("Opening disc: {}", self.input_path.display());
         let options = nod::OpenOptions {
@@ -181,7 +179,6 @@ impl WbfsConverter {
         Ok(())
     }
 
-    /// Creates the output directory and returns the base path for the WBFS file.
     fn prepare_output_paths(&self, disc: &nod::Disc) -> Result<PathBuf, WbfsError> {
         let disc_header = disc.header();
         let game_id = disc_header.game_id_str().to_string();
@@ -199,14 +196,15 @@ impl WbfsConverter {
         Ok(final_dir.join(&game_id).with_extension("wbfs"))
     }
 
-    /// Analyzes the disc structure to determine which sectors are in use.
     fn build_usage_table(&self, disc: &mut nod::Disc) -> Result<Vec<bool>, WbfsError> {
         info!("Building disc usage table (scrubbing)...");
         let mut usage_table = vec![false; MAX_WII_SECTORS];
 
         mark_iso_sectors_used(&mut usage_table, 0, WII_SECTOR_SIZE);
+        // Partition Table Offset
         mark_iso_sectors_used(&mut usage_table, 0x40000, WII_SECTOR_SIZE);
         if disc.region().is_some() {
+            // Region Data Offset
             mark_iso_sectors_used(&mut usage_table, 0x4E000, WII_SECTOR_SIZE);
         }
 
@@ -218,8 +216,12 @@ impl WbfsConverter {
             let part_start_offset = part_info.start_sector as u64 * WII_SECTOR_SIZE;
             let wii_part_header = &part_info.header;
 
-            // Mark headers and metadata as used
-            mark_iso_sectors_used(&mut usage_table, part_start_offset, 0x2C0); // Ticket + TMD Info
+            // Mark headers and metadata as used.
+            mark_iso_sectors_used(
+                &mut usage_table,
+                part_start_offset,
+                std::mem::size_of_val(&**wii_part_header) as u64,
+            );
             mark_iso_sectors_used(
                 &mut usage_table,
                 part_start_offset + wii_part_header.tmd_off(),
@@ -236,7 +238,6 @@ impl WbfsConverter {
                 wii_part_header.h3_table_size(),
             );
 
-            // Open the partition to read its internal structure
             let mut partition = disc.open_partition(part_info.index)?;
             let meta = partition.meta()?;
             let fst = meta
@@ -244,7 +245,6 @@ impl WbfsConverter {
                 .map_err(|e| WbfsError::InvalidInput(e.to_string()))?;
             let part_header = meta.partition_header();
 
-            // Mark DOL, FST, and main header as used
             let dol_offset = part_header.dol_offset(true);
             let fst_offset = part_header.fst_offset(true);
             let fst_size = part_header.fst_size(true);
@@ -257,7 +257,6 @@ impl WbfsConverter {
             );
             mark_partition_data_sectors(&mut usage_table, part_info, fst_offset, fst_size);
 
-            // Mark all files listed in the FST as used
             for node in fst.nodes {
                 if node.is_file() {
                     mark_partition_data_sectors(
@@ -272,7 +271,6 @@ impl WbfsConverter {
         Ok(usage_table)
     }
 
-    /// Writes the data to a WBFS file based on the provided usage table.
     fn write_wbfs(
         &self,
         disc: &mut nod::Disc,
@@ -282,71 +280,94 @@ impl WbfsConverter {
         info!("Writing WBFS file...");
         let mut writer = SplitWbfsWriter::new(wbfs_base_path, SPLIT_SIZE_4GB_MINUS_32KB)?;
 
-        let mut iso_header_buf = vec![0; WBFS_DISC_HEADER_SIZE];
-        disc.seek(SeekFrom::Start(0))?;
-        disc.read_exact(&mut iso_header_buf)?;
-
-        let wbfs_block_size_shift = 6;
-        let wii_sectors_per_wbfs_block = 1 << wbfs_block_size_shift;
-        let wbfs_sector_size_shift = wbfs_block_size_shift + 15;
-        let wbfs_sector_size = 1u64 << wbfs_sector_size_shift;
-
-        let total_blocks_to_process = MAX_WII_SECTORS >> wbfs_block_size_shift;
-        debug!("Processing {total_blocks_to_process} blocks for dual-layer compatibility.");
-
-        let mut disc_info =
-            vec![0u8; WBFS_DISC_HEADER_SIZE + (MAX_WII_SECTORS >> wbfs_block_size_shift) * 2];
-        disc_info[..WBFS_DISC_HEADER_SIZE].copy_from_slice(&iso_header_buf);
-        let wlba_table_offset = WBFS_DISC_HEADER_SIZE;
-
-        let mut free_block_allocator = 1u16;
-        let mut wbfs_block_buffer = vec![0; usize::try_from(wbfs_sector_size)?];
-
-        for i in 0..total_blocks_to_process {
-            let start_sec = i * wii_sectors_per_wbfs_block;
-            let end_sec = start_sec + wii_sectors_per_wbfs_block;
-            let is_used =
-                (start_sec..std::cmp::min(end_sec, MAX_WII_SECTORS)).any(|k| usage_table[k]);
-
-            if is_used {
-                let block_addr = free_block_allocator;
-                free_block_allocator += 1;
-                if free_block_allocator == 0 {
-                    return Err(WbfsError::PartitionFull);
-                }
-
-                disc_info[wlba_table_offset + i * 2..wlba_table_offset + i * 2 + 2]
-                    .copy_from_slice(&block_addr.to_be_bytes());
-
-                let iso_offset = (start_sec as u64) * WII_SECTOR_SIZE;
-                disc.seek(SeekFrom::Start(iso_offset))?;
-                disc.read_exact(&mut wbfs_block_buffer)?;
-
-                let wbfs_offset = u64::from(block_addr) * wbfs_sector_size;
-                writer.write(wbfs_offset, &wbfs_block_buffer)?;
-            } else {
-                disc_info[wlba_table_offset + i * 2..wlba_table_offset + i * 2 + 2]
-                    .copy_from_slice(&0u16.to_be_bytes());
-            }
-        }
+        let (disc_info, free_block_allocator, wbfs_sector_size) =
+            create_wbfs_disc_info_and_write_data(disc, usage_table, &mut writer)?;
 
         writer.write(WBFS_HEADER_SECTOR_SIZE, &disc_info)?;
 
-        let mut wbfs_head = vec![0u8; usize::try_from(WBFS_HEADER_SECTOR_SIZE)?];
-        let num_header_sectors =
-            (u64::from(free_block_allocator) * wbfs_sector_size) / WBFS_HEADER_SECTOR_SIZE;
-        wbfs_head[0..4].copy_from_slice(&WBFS_MAGIC.to_be_bytes());
-        wbfs_head[4..8].copy_from_slice(&u32::try_from(num_header_sectors)?.to_be_bytes());
-        wbfs_head[8] = 9; // log2(512)
-        wbfs_head[9] = u8::try_from(wbfs_sector_size_shift)?;
-        wbfs_head[12] = 1; // Mark disc slot 0 as used
-        writer.write(0, &wbfs_head)?;
+        create_and_write_wbfs_header(&mut writer, free_block_allocator, wbfs_sector_size)?;
 
         let final_size = u64::from(free_block_allocator) * wbfs_sector_size;
         writer.truncate(final_size)?;
 
         Ok(())
     }
+}
+
+/// Creates the disc info buffer (header + LBA mapping) and writes the used data blocks.
+fn create_wbfs_disc_info_and_write_data(
+    disc: &mut nod::Disc,
+    usage_table: &[bool],
+    writer: &mut SplitWbfsWriter,
+) -> Result<(Vec<u8>, u16, u64), WbfsError> {
+    let mut iso_header_buf = vec![0; WBFS_DISC_HEADER_SIZE];
+    disc.seek(SeekFrom::Start(0))?;
+    disc.read_exact(&mut iso_header_buf)?;
+
+    let wbfs_block_size_shift = 6;
+    let wii_sectors_per_wbfs_block = 1 << wbfs_block_size_shift;
+    let wbfs_sector_size_shift = wbfs_block_size_shift + 15;
+    let wbfs_sector_size = 1u64 << wbfs_sector_size_shift;
+
+    let total_blocks_to_process = MAX_WII_SECTORS >> wbfs_block_size_shift;
+    debug!("Processing {total_blocks_to_process} blocks for dual-layer compatibility.");
+
+    let mut disc_info =
+        vec![0u8; WBFS_DISC_HEADER_SIZE + (MAX_WII_SECTORS >> wbfs_block_size_shift) * 2];
+    disc_info[..WBFS_DISC_HEADER_SIZE].copy_from_slice(&iso_header_buf);
+    let wlba_table_offset = WBFS_DISC_HEADER_SIZE;
+
+    let mut free_block_allocator = 1u16;
+    let mut wbfs_block_buffer = vec![0; usize::try_from(wbfs_sector_size)?];
+
+    for i in 0..total_blocks_to_process {
+        let start_sec = i * wii_sectors_per_wbfs_block;
+        let end_sec = start_sec + wii_sectors_per_wbfs_block;
+        let is_used = (start_sec..std::cmp::min(end_sec, MAX_WII_SECTORS)).any(|k| usage_table[k]);
+
+        if is_used {
+            let block_addr = free_block_allocator;
+            free_block_allocator += 1;
+            if free_block_allocator == 0 {
+                return Err(WbfsError::PartitionFull);
+            }
+
+            disc_info[wlba_table_offset + i * 2..wlba_table_offset + i * 2 + 2]
+                .copy_from_slice(&block_addr.to_be_bytes());
+
+            let iso_offset = (start_sec as u64) * WII_SECTOR_SIZE;
+            disc.seek(SeekFrom::Start(iso_offset))?;
+            disc.read_exact(&mut wbfs_block_buffer)?;
+
+            let wbfs_offset = u64::from(block_addr) * wbfs_sector_size;
+            writer.write(wbfs_offset, &wbfs_block_buffer)?;
+        } else {
+            disc_info[wlba_table_offset + i * 2..wlba_table_offset + i * 2 + 2]
+                .copy_from_slice(&0u16.to_be_bytes());
+        }
+    }
+
+    Ok((disc_info, free_block_allocator, wbfs_sector_size))
+}
+
+/// Creates and writes the main WBFS header to the start of the file.
+fn create_and_write_wbfs_header(
+    writer: &mut SplitWbfsWriter,
+    free_block_allocator: u16,
+    wbfs_sector_size: u64,
+) -> Result<(), WbfsError> {
+    let mut wbfs_head = vec![0u8; usize::try_from(WBFS_HEADER_SECTOR_SIZE)?];
+    let num_header_sectors =
+        (u64::from(free_block_allocator) * wbfs_sector_size) / WBFS_HEADER_SECTOR_SIZE;
+    let wbfs_sector_size_shift = wbfs_sector_size.trailing_zeros();
+
+    wbfs_head[0..4].copy_from_slice(&WBFS_MAGIC.to_be_bytes());
+    wbfs_head[4..8].copy_from_slice(&u32::try_from(num_header_sectors)?.to_be_bytes());
+    wbfs_head[8] = (WBFS_HEADER_SECTOR_SIZE as f64).log2() as u8;
+    wbfs_head[9] = u8::try_from(wbfs_sector_size_shift)?;
+    wbfs_head[12] = 1; // Mark disc slot 0 as used
+    writer.write(0, &wbfs_head)?;
+    Ok(())
 }
 
 /// Marks a range of absolute ISO sectors as used.
