@@ -17,7 +17,7 @@ const MAX_WII_SECTORS: usize = (DL_DVD_SIZE / WII_SECTOR_SIZE) as usize;
 // SECTOR_DATA_SIZE is the size of a Wii sector excluding the SHA-1 hash area (0x8000 - 0x400).
 const SECTOR_DATA_SIZE: u64 = (SECTOR_SIZE - 0x400) as u64;
 const WBFS_MAGIC: u32 = 0x5742_4653; // "WBFS"
-const SPLIT_SIZE_4GB_MINUS_32KB: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
+const DEFAULT_SPLIT_SIZE: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
 const INVALID_PATH_CHARS: &[char] = &['/', '\\', ':', '|', '<', '>', '?', '*', '"', '\''];
 const PARTITION_MAIN_HEADER_SIZE: u64 = 0x480;
 const WBFS_HEADER_SECTOR_SIZE: u64 = 512;
@@ -278,7 +278,7 @@ impl WbfsConverter {
         wbfs_base_path: &Path,
     ) -> Result<(), WbfsError> {
         info!("Writing WBFS file...");
-        let mut writer = SplitWbfsWriter::new(wbfs_base_path, SPLIT_SIZE_4GB_MINUS_32KB)?;
+        let mut writer = SplitWbfsWriter::new(wbfs_base_path, DEFAULT_SPLIT_SIZE)?;
 
         let (disc_info, free_block_allocator, wbfs_sector_size) =
             create_wbfs_disc_info_and_write_data(disc, usage_table, &mut writer)?;
