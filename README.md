@@ -1,6 +1,6 @@
 # iso2wbfs
 
-Fast, modern command-line tool to convert Nintendo Wii Disc images to WBFS format.
+A simple library / command-line tool to convert Nintendo Wii Disc images to WBFS.
 
 ## Features
 

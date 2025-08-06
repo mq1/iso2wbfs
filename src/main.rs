@@ -3,7 +3,6 @@
 
 use anyhow::Result;
 use clap::Parser;
-use iso2wbfs::WbfsConverter;
 use log::info;
 use std::path::PathBuf;
 
@@ -12,7 +11,7 @@ use std::path::PathBuf;
 struct Args {
     /// Path to the input Wii Disc file.
     #[arg()]
-    iso_path: PathBuf,
+    input_path: PathBuf,
 
     /// Directory to save the WBFS file(s). Will be created if it doesn't exist.
     #[arg()]
@@ -30,10 +29,9 @@ fn main() -> Result<()> {
     let log_level = if args.verbose { "debug" } else { "info" };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
 
-    info!("Starting conversion for: {}", args.iso_path.display());
+    info!("Starting conversion for: {}", args.input_path.display());
 
-    let converter = WbfsConverter::new(&args.iso_path, &args.output_dir)?;
-    converter.convert()?;
+    iso2wbfs::convert_to_wbfs(&args.input_path, &args.output_dir)?;
 
     Ok(())
 }
