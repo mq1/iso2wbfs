@@ -16,7 +16,7 @@ const WII_SECTOR_SIZE: u64 = SECTOR_SIZE as u64;
 const MAX_WII_SECTORS: usize = (DL_DVD_SIZE / WII_SECTOR_SIZE) as usize;
 // SECTOR_DATA_SIZE is the size of a Wii sector excluding the SHA-1 hash area (0x8000 - 0x400).
 const SECTOR_DATA_SIZE: u64 = (SECTOR_SIZE - 0x400) as u64;
-const WBFS_MAGIC: u32 = 0x57424653; // "WBFS"
+const WBFS_MAGIC: u32 = u32::from_be_bytes(*b"WBFS"); // "WBFS" magic number
 const DEFAULT_SPLIT_SIZE: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024); // 4 GiB - 32 KiB
 const INVALID_PATH_CHARS: &[char] = &['/', '\\', ':', '|', '<', '>', '?', '*', '"', '\''];
 const PARTITION_MAIN_HEADER_SIZE: u64 = 0x480;
