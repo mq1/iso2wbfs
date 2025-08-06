@@ -1,27 +1,34 @@
 # iso2wbfs
 
-A wbfs_file 2.9 reverse engineering experiment.
+Fast, modern command-line tool to convert Nintendo Wii Disc images to WBFS format.
 
-I wanted to test the reverse-engineering capabilities of Gemini 2.5 Pro, and this seemed the perfect project.
-I included the initial prompts I used and the original source code (packed in one .txt with code2prompt).
-The reverse engineering was made with the temperature set at 0.4.
+## Features
 
-I made a Python script (running with uv is preferred) and a Rust library and cli.
+- Simple CLI interface
+- Cross-platform (macOS, Linux, Windows)
+- Supports all Disc files that NOD supports
 
-Run the python script (uv):
+## Build
+
+Clone and build with Cargo:
+
+```sh
+git clone https://github.com/mq1/iso2wbfs.git
+cd iso2wbfs
+cargo build --release --features cli --bin iso2wbfs
 ```
-uv run iso2wbfs.py ./input.iso ./out_dir
+
+## Usage
+
+```sh
+./target/release/iso2wbfs -h
 ```
 
-Compile the example Rust cli implementation with:
-```
-cargo run --release --features=cli -- ./input.iso ./out_dir
-```
+## License
 
-# Licenses
+GPL-2.0-only. Portions from wbfs_file 2.9 (GPL-2.0-only) and NOD (MIT).
 
-This project is distributed under the [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) license.
+## Credits
 
-wbfs_file 2.9 is distributed under the [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) license.
-
-rvz-1.0.3 is distributed under the [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) license.
+- Based on [wbfs_file 2.9](https://github.com/FunctionDJ/wbfs_file_2.9)
+- Using [NOD](https://github.com/encounter/nod)
