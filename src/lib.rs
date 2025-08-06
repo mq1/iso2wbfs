@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use log::{debug, error, info};
 use thiserror::Error;
 // Use constants from nod to reduce duplication and improve robustness.
-use nod::{DL_DVD_SIZE, SECTOR_SIZE};
+use nod::SECTOR_SIZE;
 
 // --- Constants ---
 const WII_SECTOR_SIZE: u64 = SECTOR_SIZE as u64;
-const MAX_WII_SECTORS: usize = (DL_DVD_SIZE / WII_SECTOR_SIZE) as usize;
+const MAX_WII_SECTORS: usize = 143432 * 2;
 // SECTOR_DATA_SIZE is the size of a Wii sector excluding the SHA-1 hash area (0x8000 - 0x400).
 const SECTOR_DATA_SIZE: u64 = (SECTOR_SIZE - 0x400) as u64;
 const WBFS_MAGIC: u32 = u32::from_be_bytes(*b"WBFS"); // "WBFS" magic number
