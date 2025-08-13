@@ -74,7 +74,6 @@ struct SplitWriter {
     base_path: PathBuf,
     split_size: u64,
     files: Vec<Option<File>>,
-    total_size: u64,
 }
 
 impl SplitWriter {
@@ -84,7 +83,6 @@ impl SplitWriter {
             base_path: base_path.to_path_buf(),
             split_size,
             files: (0..MAX_SPLITS).map(|_| None).collect(),
-            total_size: 0,
         }
     }
 
@@ -92,7 +90,7 @@ impl SplitWriter {
     fn get_filename(&self, index: usize) -> PathBuf {
         let mut path_str = self.base_path.to_string_lossy().to_string();
         if index > 0 {
-            // Replace the last character with the split number for .wbf1, .wbf2, etc.
+            // Replaces `.wbfs` with `.wbf1`, `.wbf2`, etc.
             path_str.pop();
             path_str.push_str(&index.to_string());
         }
@@ -145,7 +143,6 @@ impl SplitWriter {
     /// Truncates the files to match the final total size.
     fn truncate(&mut self, total_size: u64) -> io::Result<()> {
         info!("Final WBFS size: {} bytes. Truncating files...", total_size);
-        self.total_size = total_size;
         let mut remaining_size = total_size;
 
         for i in 0..MAX_SPLITS {
@@ -167,13 +164,10 @@ impl SplitWriter {
         // Delete any created but now-empty split files
         for i in 0..MAX_SPLITS {
             let filename = self.get_filename(i);
-            if self.files[i].is_some() {
-                if filename.exists() {
-                    let file_size = filename.metadata()?.len();
-                    if file_size == 0 {
-                        debug!("Removing empty split file: {}", filename.display());
-                        fs::remove_file(filename)?;
-                    }
+            if self.files[i].is_some() && filename.exists() {
+                if filename.metadata()?.len() == 0 {
+                    debug!("Removing empty split file: {}", filename.display());
+                    fs::remove_file(filename)?;
                 }
             }
         }
@@ -276,18 +270,18 @@ impl<'a> WbfsConverter<'a> {
 
     /// Performs the main conversion logic.
     fn convert(&self) -> Result<()> {
-        // 1. Open input disc and analyze it
+        // Step 1: Open input disc and analyze its structure to find used data.
         let mut disc = nod::Disc::new(self.input_path)?;
         let used_sectors = self.build_used_sector_map(&mut disc)?;
 
-        // 2. Re-open disc with options to get a raw ISO stream
+        // Step 2: Re-open the disc with options that force it into a raw, decrypted ISO stream.
         let options = nod::OpenOptions {
             rebuild_encryption: true,
             ..Default::default()
         };
         let mut source_iso_stream = nod::Disc::new_with_options(self.input_path, &options)?;
 
-        // 3. Prepare output files
+        // Step 3: Prepare output directory and filenames based on disc metadata.
         let header = disc.header();
         let game_id = header.game_id_str();
         let mut game_title = header.game_title_str().to_string();
@@ -311,15 +305,15 @@ impl<'a> WbfsConverter<'a> {
 
         // The base path for the .wbfs files is now inside the new directory.
         let out_base_path = game_output_dir.join(format!("{}.wbfs", game_id));
-
         info!("Output base path: {}", out_base_path.display());
         let mut writer = SplitWriter::new(&out_base_path, SPLIT_SIZE);
 
-        // 4. Calculate WBFS parameters
+        // Step 4: Calculate WBFS parameters.
         let n_wii_sec = WII_MAX_SECTORS as u32;
         let wii_sec_sz_s = (WII_SECTOR_SIZE as u32).trailing_zeros() as u8;
 
         // Determine the optimal WBFS sector size based on disc size, replicating libwbfs logic.
+        // This finds the smallest WBFS block size that can address the entire disc with a 16-bit index.
         let mut sz_s = 6; // Start with 2MB WBFS sectors (32KB * 2^6)
         while sz_s < 11 {
             if (n_wii_sec as u64) < ((1u64 << 16) * (1u64 << sz_s)) {
@@ -342,10 +336,10 @@ impl<'a> WbfsConverter<'a> {
             wbfs_sector_size, wii_sectors_per_wbfs_sector
         );
 
-        // 5. Main conversion loop
+        // Step 5: Main conversion loop. Copy used data from ISO stream to WBFS files.
         info!("Starting data conversion...");
         let mut wlba_table = vec![0u16; num_wbfs_blocks_in_disc as usize];
-        let mut next_free_wbfs_block: u32 = 1; // Block 0 is for metadata
+        let mut next_free_wbfs_block: u32 = 1; // Block 0 is reserved for metadata.
         let mut data_buffer = vec![0u8; wbfs_sector_size as usize];
 
         for wbfs_block_idx in 0..num_wbfs_blocks_in_disc {
@@ -372,7 +366,7 @@ impl<'a> WbfsConverter<'a> {
             next_free_wbfs_block - 1
         );
 
-        // 6. Write metadata
+        // Step 6: Write WBFS metadata to the beginning of the first file.
         info!("Writing WBFS metadata...");
         let total_hd_sectors_used =
             (next_free_wbfs_block as u64 * wbfs_sector_size) / HD_SECTOR_SIZE as u64;
@@ -422,7 +416,7 @@ impl<'a> WbfsConverter<'a> {
         writer.write_all_at(0, &metadata_buf)?;
         writer.write_all_at(freeblks_offset, &free_map_buf)?;
 
-        // 7. Truncate files
+        // Step 7: Truncate files to their final, correct sizes.
         let final_size = next_free_wbfs_block as u64 * wbfs_sector_size;
         writer.truncate(final_size)?;
 

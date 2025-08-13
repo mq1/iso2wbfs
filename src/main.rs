@@ -3,14 +3,15 @@
 
 use clap::Parser;
 use std::path::PathBuf;
+// Corrected: Import the necessary extension traits for `.with()` and `.init()`
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-#[command(
-    long_about = "A Rust utility to convert Wii disc images to the split WBFS file format, replicating the default behavior of wbfs_file v2.9."
-)]
-struct Args {
-    /// Increase verbosity level. Can be used multiple times.
+/// A Rust utility to convert Wii disc images to the split WBFS file format,
+/// replicating the default behavior of wbfs_file v2.9.
+#[derive(Parser, Debug, Clone)]
+#[command(version, about, long_about = None)]
+struct Options {
+    /// Increase verbosity level (-v for debug, -vv for trace).
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
 
@@ -23,35 +24,33 @@ struct Args {
     output_directory: PathBuf,
 }
 
-use tracing::instrument;
-use tracing_subscriber::FmtSubscriber;
-
-#[instrument]
 fn main() {
-    let args = Args::parse();
+    let options = Options::parse();
 
-    let level = match args.verbose {
-        0 => tracing::Level::INFO,
-        1 => tracing::Level::DEBUG,
-        _ => tracing::Level::TRACE,
+    // --- Logger Initialization ---
+    let filter_level = match options.verbose {
+        0 => "info",
+        1 => "debug",
+        _ => "trace",
     };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter_level));
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(level)
-        .without_time()
-        .with_target(false)
-        .finish();
+    // The `.with()` and `.init()` methods are now available because their
+    // providing traits (SubscriberExt, SubscriberInitExt) are in scope.
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(filter)
+        .init();
 
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-
+    // --- Execute Conversion ---
     tracing::info!(
         "Starting conversion of '{}' to '{}'",
-        args.input_file.display(),
-        args.output_directory.display()
+        options.input_file.display(),
+        options.output_directory.display()
     );
 
-    if let Err(e) = iso2wbfs::convert(&args.input_file, &args.output_directory) {
-        tracing::error!("Conversion failed: {e}");
+    if let Err(e) = iso2wbfs::convert(&options.input_file, &options.output_directory) {
+        tracing::error!("Conversion failed: {}", e);
         std::process::exit(1);
     }
 
