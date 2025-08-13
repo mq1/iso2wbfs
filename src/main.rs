@@ -3,8 +3,7 @@
 
 use clap::Parser;
 use std::path::PathBuf;
-// Corrected: Import the necessary extension traits for `.with()` and `.init()`
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 /// A Rust utility to convert Wii disc images to the split WBFS file format,
 /// replicating the default behavior of wbfs_file v2.9.
@@ -28,15 +27,9 @@ fn main() {
     let options = Options::parse();
 
     // --- Logger Initialization ---
-    let filter_level = match options.verbose {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
+    let filter_level = ["info", "debug", "trace"][options.verbose.min(2) as usize];
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter_level));
 
-    // The `.with()` and `.init()` methods are now available because their
-    // providing traits (SubscriberExt, SubscriberInitExt) are in scope.
     tracing_subscriber::registry()
         .with(fmt::layer().with_writer(std::io::stderr))
         .with(filter)

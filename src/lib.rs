@@ -5,7 +5,7 @@
 //! replicating the default behavior of `wbfs_file v2.9`.
 
 use bitvec::prelude::*;
-use nod::{Disc, SECTOR_SIZE as WII_SECTOR_SIZE};
+use nod::{Disc, DiscHeader, SECTOR_SIZE as WII_SECTOR_SIZE};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -18,8 +18,8 @@ use zerocopy::IntoBytes;
 const WBFS_MAGIC: u32 = 0x57424653;
 /// The size of a hard drive sector, as assumed by libwbfs.
 const HD_SECTOR_SIZE: u32 = 512;
-/// The maximum number of sectors on a dual-layer Wii disc.
-const WII_MAX_SECTORS: usize = 286864; // 143432 * 2
+/// The maximum number of sectors on a dual-layer Wii disc (143432 sectors/layer).
+const WII_MAX_SECTORS: usize = 143432 * 2;
 /// The fixed split size for output files: 4 GiB - 32 KiB.
 const SPLIT_SIZE: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
 /// The maximum number of file splits allowed.
@@ -46,7 +46,6 @@ type Result<T> = std::result::Result<T, ConversionError>;
 // --- WBFS Structure Definitions ---
 
 /// Represents the main header of a WBFS file or partition.
-/// This structure is written to the beginning of the first file.
 struct WbfsHeader {
     magic: u32,
     n_hd_sec: u32,
@@ -149,29 +148,55 @@ impl SplitWriter {
             let filename = self.get_filename(i);
             if let Some(file) = self.files[i].as_mut() {
                 let size_for_this_file = remaining_size.min(self.split_size);
-                if size_for_this_file > 0 {
-                    debug!(
-                        "Truncating {} to {} bytes",
-                        filename.display(),
-                        size_for_this_file
-                    );
-                    file.set_len(size_for_this_file)?;
-                    remaining_size -= size_for_this_file;
-                }
+                debug!(
+                    "Truncating {} to {} bytes",
+                    filename.display(),
+                    size_for_this_file
+                );
+                file.set_len(size_for_this_file)?;
+                remaining_size -= size_for_this_file;
             }
         }
 
         // Delete any created but now-empty split files
         for i in 0..MAX_SPLITS {
             let filename = self.get_filename(i);
-            if self.files[i].is_some() && filename.exists() {
-                if filename.metadata()?.len() == 0 {
-                    debug!("Removing empty split file: {}", filename.display());
-                    fs::remove_file(filename)?;
-                }
+            if self.files[i].is_some() && filename.exists() && filename.metadata()?.len() == 0 {
+                debug!("Removing empty split file: {}", filename.display());
+                fs::remove_file(filename)?;
             }
         }
         Ok(())
+    }
+}
+
+/// Encapsulates the logic for creating output paths.
+struct OutputPaths {
+    /// The final base path for the `.wbfs` file, e.g., `.../TITLE [ID]/ID.wbfs`.
+    base_path: PathBuf,
+}
+
+impl OutputPaths {
+    fn new(output_dir: &Path, header: &DiscHeader) -> Result<Self> {
+        let game_id = header.game_id_str();
+        let mut game_title = header.game_title_str().to_string();
+
+        // Sanitize game title for use in a directory name.
+        game_title = game_title.trim().to_string();
+        for c in INVALID_FILENAME_CHARS.chars() {
+            game_title = game_title.replace(c, "_");
+        }
+
+        // Create the game-specific subdirectory: TITLE [ID]
+        let game_dir_name = format!("{} [{}]", game_title, game_id);
+        let game_output_dir = output_dir.join(game_dir_name);
+        info!("Creating game directory: {}", game_output_dir.display());
+        fs::create_dir_all(&game_output_dir)?;
+
+        // The base path for the .wbfs files is now inside the new directory.
+        let base_path = game_output_dir.join(format!("{}.wbfs", game_id));
+
+        Ok(Self { base_path })
     }
 }
 
@@ -189,6 +214,25 @@ impl<'a> WbfsConverter<'a> {
         }
     }
 
+    /// Marks the sectors for a given data range within a partition as used.
+    fn mark_used_data_sectors(
+        used_sectors: &mut BitSlice<u8, Lsb0>,
+        part_data_start_sector: u32,
+        offset: u64,
+        length: u64,
+    ) {
+        if length > 0 {
+            // The data is stored in blocks of 0x7C00 bytes within the 0x8000 byte sectors.
+            let data_block_size = (WII_SECTOR_SIZE - 0x400) as u64;
+            let start_data_sector = offset / data_block_size;
+            let end_data_sector = (offset + length - 1) / data_block_size;
+            for s in start_data_sector..=end_data_sector {
+                let physical_sector = part_data_start_sector as u64 + s;
+                used_sectors.set(physical_sector as usize, true);
+            }
+        }
+    }
+
     /// Builds a map of which 32 KiB sectors of the disc image are in use.
     fn build_used_sector_map(&self, disc: &mut Disc) -> Result<BitVec<u8, Lsb0>> {
         info!("Analyzing disc structure to find used data sectors...");
@@ -199,7 +243,7 @@ impl<'a> WbfsConverter<'a> {
         used_sectors.set(0x40000 / WII_SECTOR_SIZE, true); // Partition table
         used_sectors.set(0x4E000 / WII_SECTOR_SIZE, true); // Region data
 
-        let partitions = disc.partitions().to_vec(); // Clone to avoid borrowing issues
+        let partitions = disc.partitions().to_vec();
         if partitions.is_empty() && disc.header().is_gamecube() {
             return Err(ConversionError::InvalidDisc(
                 "GameCube discs are not supported by WBFS.".to_string(),
@@ -211,10 +255,9 @@ impl<'a> WbfsConverter<'a> {
                 "Processing partition {} ({:?})",
                 part_info.index, part_info.kind
             );
-            // Mark partition metadata area as used
-            for s in part_info.start_sector..part_info.data_start_sector {
-                used_sectors.set(s as usize, true);
-            }
+            // Mark the entire partition metadata area as used.
+            (part_info.start_sector..part_info.data_start_sector)
+                .for_each(|s| used_sectors.set(s as usize, true));
 
             let mut partition = disc.open_partition(part_info.index)?;
             let meta = partition.meta()?;
@@ -222,103 +265,70 @@ impl<'a> WbfsConverter<'a> {
                 .fst()
                 .map_err(|e| ConversionError::InvalidDisc(e.to_string()))?;
 
-            // Mark sectors used by the FST and DOL
             let is_wii = meta.header().is_wii();
             let dol_offset = meta.partition_header().dol_offset(is_wii);
             let fst_offset = meta.partition_header().fst_offset(is_wii);
             let fst_size = meta.partition_header().fst_size(is_wii);
-            let dol_size = fst_offset - dol_offset; // DOL is right before FST
+            let dol_size = fst_offset - dol_offset;
 
-            let ranges_to_mark = [(dol_offset, dol_size), (fst_offset, fst_size)];
-            for (offset, length) in ranges_to_mark {
-                if length > 0 {
-                    let start_data_sector = offset / (WII_SECTOR_SIZE - 0x400) as u64;
-                    let end_data_sector = (offset + length - 1) / (WII_SECTOR_SIZE - 0x400) as u64;
-                    for s in start_data_sector..=end_data_sector {
-                        let physical_sector = part_info.data_start_sector as u64 + s;
-                        used_sectors.set(physical_sector as usize, true);
-                    }
-                }
-            }
+            // Mark sectors for DOL and FST.
+            Self::mark_used_data_sectors(
+                &mut used_sectors,
+                part_info.data_start_sector,
+                dol_offset,
+                dol_size,
+            );
+            Self::mark_used_data_sectors(
+                &mut used_sectors,
+                part_info.data_start_sector,
+                fst_offset,
+                fst_size,
+            );
 
-            // Mark sectors used by files in the FST
+            // Mark sectors for all files in the FST.
             for (_, node, name_res) in fst.iter() {
                 if node.is_file() {
-                    let name = name_res.unwrap_or_else(|_| "[invalid name]".into());
-                    trace!("Found file: {}, size: {}", name, node.length());
-                    let offset = node.offset(is_wii);
-                    let length = node.length();
-                    if length > 0 {
-                        let start_data_sector = offset / (WII_SECTOR_SIZE - 0x400) as u64;
-                        let end_data_sector =
-                            (offset + length - 1) / (WII_SECTOR_SIZE - 0x400) as u64;
-                        for s in start_data_sector..=end_data_sector {
-                            let physical_sector = part_info.data_start_sector as u64 + s;
-                            used_sectors.set(physical_sector as usize, true);
-                        }
-                    }
+                    trace!(
+                        "Found file: {}",
+                        name_res.unwrap_or_else(|_| "[invalid name]".into())
+                    );
+                    Self::mark_used_data_sectors(
+                        &mut used_sectors,
+                        part_info.data_start_sector,
+                        node.offset(is_wii),
+                        node.length(),
+                    );
                 }
             }
         }
-        let used_count = used_sectors.count_ones();
         info!(
-            "Analysis complete. Found {} used sectors out of {} total.",
-            used_count, WII_MAX_SECTORS
+            "Analysis complete. Found {} used sectors.",
+            used_sectors.count_ones()
         );
         Ok(used_sectors)
     }
 
     /// Performs the main conversion logic.
     fn convert(&self) -> Result<()> {
-        // Step 1: Open input disc and analyze its structure to find used data.
         let mut disc = nod::Disc::new(self.input_path)?;
         let used_sectors = self.build_used_sector_map(&mut disc)?;
 
-        // Step 2: Re-open the disc with options that force it into a raw, decrypted ISO stream.
         let options = nod::OpenOptions {
             rebuild_encryption: true,
             ..Default::default()
         };
         let mut source_iso_stream = nod::Disc::new_with_options(self.input_path, &options)?;
 
-        // Step 3: Prepare output directory and filenames based on disc metadata.
-        let header = disc.header();
-        let game_id = header.game_id_str();
-        let mut game_title = header.game_title_str().to_string();
+        let output_paths = OutputPaths::new(self.output_dir, disc.header())?;
+        let mut writer = SplitWriter::new(&output_paths.base_path, SPLIT_SIZE);
 
-        // The raw header bytes are needed for the WBFS metadata.
-        let header_bytes = header.as_bytes();
-        let mut disc_header_copy = [0u8; 256];
-        disc_header_copy.copy_from_slice(&header_bytes[..256]);
-
-        // Sanitize game title for use in a directory name.
-        game_title = game_title.trim().to_string();
-        for c in INVALID_FILENAME_CHARS.chars() {
-            game_title = game_title.replace(c, "_");
-        }
-
-        // Create the game-specific subdirectory: TITLE [ID]
-        let game_dir_name = format!("{} [{}]", game_title, game_id);
-        let game_output_dir = self.output_dir.join(game_dir_name);
-        info!("Creating game directory: {}", game_output_dir.display());
-        fs::create_dir_all(&game_output_dir)?;
-
-        // The base path for the .wbfs files is now inside the new directory.
-        let out_base_path = game_output_dir.join(format!("{}.wbfs", game_id));
-        info!("Output base path: {}", out_base_path.display());
-        let mut writer = SplitWriter::new(&out_base_path, SPLIT_SIZE);
-
-        // Step 4: Calculate WBFS parameters.
         let n_wii_sec = WII_MAX_SECTORS as u32;
         let wii_sec_sz_s = (WII_SECTOR_SIZE as u32).trailing_zeros() as u8;
 
-        // Determine the optimal WBFS sector size based on disc size, replicating libwbfs logic.
-        // This finds the smallest WBFS block size that can address the entire disc with a 16-bit index.
+        // Determine the optimal WBFS sector size. This replicates the logic from the original C tool,
+        // finding the smallest WBFS block size that can address the entire disc with a 16-bit index.
         let mut sz_s = 6; // Start with 2MB WBFS sectors (32KB * 2^6)
-        while sz_s < 11 {
-            if (n_wii_sec as u64) < ((1u64 << 16) * (1u64 << sz_s)) {
-                break;
-            }
+        while sz_s < 11 && (n_wii_sec as u64) >= ((1u64 << 16) * (1u64 << sz_s)) {
             sz_s += 1;
         }
         if sz_s == 11 {
@@ -336,7 +346,6 @@ impl<'a> WbfsConverter<'a> {
             wbfs_sector_size, wii_sectors_per_wbfs_sector
         );
 
-        // Step 5: Main conversion loop. Copy used data from ISO stream to WBFS files.
         info!("Starting data conversion...");
         let mut wlba_table = vec![0u16; num_wbfs_blocks_in_disc as usize];
         let mut next_free_wbfs_block: u32 = 1; // Block 0 is reserved for metadata.
@@ -346,10 +355,7 @@ impl<'a> WbfsConverter<'a> {
             let start_wii_sector = wbfs_block_idx * wii_sectors_per_wbfs_sector;
             let end_wii_sector = (start_wii_sector + wii_sectors_per_wbfs_sector).min(n_wii_sec);
 
-            let is_used = (start_wii_sector..end_wii_sector)
-                .any(|s| used_sectors.get(s as usize).map_or(false, |b| *b));
-
-            if is_used {
+            if (start_wii_sector..end_wii_sector).any(|s| used_sectors[s as usize]) {
                 let wii_block_offset = start_wii_sector as u64 * WII_SECTOR_SIZE as u64;
                 source_iso_stream.seek(SeekFrom::Start(wii_block_offset))?;
                 source_iso_stream.read_exact(&mut data_buffer)?;
@@ -357,7 +363,7 @@ impl<'a> WbfsConverter<'a> {
                 let target_offset = next_free_wbfs_block as u64 * wbfs_sector_size;
                 writer.write_all_at(target_offset, &data_buffer)?;
 
-                wlba_table[wbfs_block_idx as usize] = next_free_wbfs_block as u16;
+                wlba_table[wbfs_block_idx as usize] = (next_free_wbfs_block as u16).to_be();
                 next_free_wbfs_block += 1;
             }
         }
@@ -366,7 +372,6 @@ impl<'a> WbfsConverter<'a> {
             next_free_wbfs_block - 1
         );
 
-        // Step 6: Write WBFS metadata to the beginning of the first file.
         info!("Writing WBFS metadata...");
         let total_hd_sectors_used =
             (next_free_wbfs_block as u64 * wbfs_sector_size) / HD_SECTOR_SIZE as u64;
@@ -386,37 +391,29 @@ impl<'a> WbfsConverter<'a> {
             (free_blocks_map_size + HD_SECTOR_SIZE - 1) & !(HD_SECTOR_SIZE - 1);
 
         let mut metadata_buf = Vec::new();
-        // WBFS Header + Disc Table (only one disc)
         metadata_buf.extend_from_slice(&header.to_bytes());
-        metadata_buf.push(1); // Mark disc slot 0 as used
+        metadata_buf.push(1); // Mark disc slot 0 as used.
         metadata_buf.resize(HD_SECTOR_SIZE as usize, 0);
 
-        // Disc Info (Header copy + WLBA table)
+        let mut disc_header_copy = [0u8; 256];
+        disc_header_copy.copy_from_slice(&disc.header().as_bytes()[..256]);
         metadata_buf.extend_from_slice(&disc_header_copy);
-        for &lba in &wlba_table {
-            metadata_buf.extend_from_slice(&lba.to_be_bytes());
-        }
+        metadata_buf.extend_from_slice(wlba_table.as_bytes());
         metadata_buf.resize(HD_SECTOR_SIZE as usize + disc_info_size_aligned as usize, 0);
 
-        // Free Blocks Table
         let freeblks_lba =
             (wbfs_sector_size - free_blocks_map_size_aligned as u64) / HD_SECTOR_SIZE as u64;
         let freeblks_offset = freeblks_lba * HD_SECTOR_SIZE as u64;
 
-        // Create a simple free block map. All blocks up to `next_free_wbfs_block` are used.
         let mut free_map = bitvec![u8, Lsb0; 1; num_wbfs_blocks_in_disc as usize];
-        for i in 1..next_free_wbfs_block {
-            free_map.set(i as usize, false); // Mark as not free (used)
-        }
-        // The original tool writes the free map at a fixed offset from the end of the first WBFS block.
+        (1..next_free_wbfs_block).for_each(|i| free_map.set(i as usize, false));
+
         let mut free_map_buf = vec![0u8; free_blocks_map_size_aligned as usize];
         free_map_buf[..free_map.as_raw_slice().len()].copy_from_slice(free_map.as_raw_slice());
 
-        // Write metadata blocks
         writer.write_all_at(0, &metadata_buf)?;
         writer.write_all_at(freeblks_offset, &free_map_buf)?;
 
-        // Step 7: Truncate files to their final, correct sizes.
         let final_size = next_free_wbfs_block as u64 * wbfs_sector_size;
         writer.truncate(final_size)?;
 
