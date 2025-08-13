@@ -5,11 +5,11 @@
 //! replicating the default behavior of `wbfs_file v2.9`.
 
 use bitvec::prelude::*;
-use log::{debug, info, trace, warn};
 use nod::{Disc, SECTOR_SIZE as WII_SECTOR_SIZE};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use tracing::{debug, info, trace, warn};
 use zerocopy::IntoBytes;
 
 // --- Constants ---

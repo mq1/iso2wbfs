@@ -1,74 +1,59 @@
 // SPDX-FileCopyrightText: 2025 Manuel Quarneti <mq1@ik.me>
 // SPDX-License-Identifier: GPL-2.0-only
 
-use bpaf::{OptionParser, Parser, construct, positional, short};
+use clap::Parser;
 use std::path::PathBuf;
 
-/// A plain data structure to hold the parsed command-line arguments.
-#[derive(Debug, Clone)]
-struct Options {
-    verbose: u64,
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+#[command(
+    long_about = "A Rust utility to convert Wii disc images to the split WBFS file format, replicating the default behavior of wbfs_file v2.9."
+)]
+struct Args {
+    /// Increase verbosity level. Can be used multiple times.
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    /// The input Wii disc image file (.iso, .wbfs, .ciso, etc.).
+    #[arg(name = "INPUT_FILE")]
     input_file: PathBuf,
+
+    /// The directory where the output .wbfs files will be created.
+    #[arg(name = "OUTPUT_DIRECTORY")]
     output_directory: PathBuf,
 }
 
-/// Defines the command-line argument parser using bpaf's functional style.
-fn options() -> OptionParser<Options> {
-    // Parser for the 'verbose' flag. It's a flag that can be repeated.
-    let verbose = short('v')
-        .long("verbose")
-        .help("Increase verbosity level. Can be used multiple times.")
-        .req_flag(()) // Indicates it's a flag, not an option with a value.
-        .many() // Allows the flag to be repeated (e.g., -vv).
-        .map(|v| v.len() as u64); // The final value is the number of occurrences.
+use tracing::instrument;
+use tracing_subscriber::FmtSubscriber;
 
-    // Parser for the positional input file argument.
-    let input_file = positional::<PathBuf>("INPUT_FILE")
-        .help("The input Wii disc image file (.iso, .wbfs, .ciso, etc.).");
-
-    // Parser for the positional output directory argument.
-    let output_directory = positional::<PathBuf>("OUTPUT_DIRECTORY")
-        .help("The directory where the output .wbfs files will be created.");
-
-    // The `construct!` macro combines the individual parsers into the Options struct.
-    let parser = construct!(Options {
-        verbose,
-        input_file,
-        output_directory,
-    });
-
-    // Attach metadata like description and version to the parser.
-    parser
-        .to_options()
-        .descr("A Rust utility to convert Wii disc images to the split WBFS file format, replicating the default behavior of wbfs_file v2.9.")
-        .version(env!("CARGO_PKG_VERSION"))
-}
-
+#[instrument]
 fn main() {
-    let options = options().run();
+    let args = Args::parse();
 
-    let log_level = match options.verbose {
-        0 => log::LevelFilter::Info,
-        1 => log::LevelFilter::Debug,
-        _ => log::LevelFilter::Trace,
+    let level = match args.verbose {
+        0 => tracing::Level::INFO,
+        1 => tracing::Level::DEBUG,
+        _ => tracing::Level::TRACE,
     };
 
-    env_logger::Builder::new()
-        .filter_level(log_level)
-        .format_timestamp(None)
-        .format_target(false)
-        .init();
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(level)
+        .without_time()
+        .with_target(false)
+        .finish();
 
-    log::info!(
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
+    tracing::info!(
         "Starting conversion of '{}' to '{}'",
-        options.input_file.display(),
-        options.output_directory.display()
+        args.input_file.display(),
+        args.output_directory.display()
     );
 
-    if let Err(e) = iso2wbfs::convert(&options.input_file, &options.output_directory) {
-        log::error!("Conversion failed: {}", e);
+    if let Err(e) = iso2wbfs::convert(&args.input_file, &args.output_directory) {
+        tracing::error!("Conversion failed: {e}");
         std::process::exit(1);
     }
 
-    log::info!("Conversion completed successfully.");
+    tracing::info!("Conversion completed successfully.");
 }

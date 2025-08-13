@@ -7,13 +7,13 @@ description = "A Rust utility to replicate wbfs_file 2.9 functionality for conve
 license = "GPL-2.0-only"
 
 [dependencies]
-nod = "1.4.4"
-bpaf = "0.9"
-log = "0.4"
-env_logger = "0.11"
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 bitvec = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 zerocopy = "0.8"
+nod = "1.4"
 
 [workspace]
 # This empty workspace allows the binary to be a separate crate within the same project folder.
