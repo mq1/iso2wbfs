@@ -1,37 +1,51 @@
 // SPDX-FileCopyrightText: 2025 Manuel Quarneti <mq1@ik.me>
 // SPDX-License-Identifier: GPL-2.0-only
 
-use anyhow::Result;
 use clap::Parser;
-use log::info;
 use std::path::PathBuf;
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Path to the input Wii Disc file.
-    #[arg()]
-    input_path: PathBuf,
+/// A Rust utility to convert Wii disc images to the split WBFS file format,
+/// replicating the default behavior of wbfs_file v2.9.
+#[derive(Parser, Debug, Clone)]
+#[command(version, about, long_about = None)]
+struct Options {
+    /// Increase verbosity level (-v for debug, -vv for trace).
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
 
-    /// Directory to save the WBFS file(s). Will be created if it doesn't exist.
-    #[arg()]
-    output_dir: PathBuf,
+    /// The input Wii disc image file (.iso, .wbfs, .ciso, etc.).
+    #[arg(name = "INPUT_FILE")]
+    input_file: PathBuf,
 
-    /// Enable detailed debug logging.
-    #[arg(short, long)]
-    verbose: bool,
+    /// The directory where the output .wbfs files will be created.
+    #[arg(name = "OUTPUT_DIRECTORY")]
+    output_directory: PathBuf,
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
+fn main() {
+    let options = Options::parse();
 
-    // Setup logging
-    let log_level = if args.verbose { "debug" } else { "info" };
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
+    // --- Logger Initialization ---
+    let filter_level = ["info", "debug", "trace"][options.verbose.min(2) as usize];
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter_level));
 
-    info!("Starting conversion for: {}", args.input_path.display());
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(filter)
+        .init();
 
-    iso2wbfs::convert_to_wbfs(&args.input_path, &args.output_dir)?;
+    // --- Execute Conversion ---
+    tracing::info!(
+        "Starting conversion of '{}' to '{}'",
+        options.input_file.display(),
+        options.output_directory.display()
+    );
 
-    Ok(())
+    if let Err(e) = iso2wbfs::convert(&options.input_file, &options.output_directory) {
+        tracing::error!("Conversion failed: {}", e);
+        std::process::exit(1);
+    }
+
+    tracing::info!("Conversion completed successfully.");
 }
