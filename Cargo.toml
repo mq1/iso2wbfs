@@ -15,4 +15,10 @@ bitvec = "1.0"
 thiserror = "2.0"
 zerocopy = "0.8"
 
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
 [workspace]
