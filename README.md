@@ -15,7 +15,7 @@ Clone and build with Cargo:
 ```sh
 git clone https://github.com/mq1/iso2wbfs.git
 cd iso2wbfs
-cargo build --release --features cli --bin iso2wbfs
+cargo build --release
 ```
 
 ## Usage
