@@ -41,9 +41,9 @@ jobs:
       - name: Prepare artifacts for upload
         run: |
           mkdir staging
-          mv target/x86_64-unknown-linux-gnu/release/iso2wbfs staging/iso2wbfs-linux-x86_64
-          mv target/aarch64-unknown-linux-gnu/release/iso2wbfs staging/iso2wbfs-linux-aarch64
-          mv target/universal2-apple-darwin/release/iso2wbfs staging/iso2wbfs-macos-universal2
+          cp target/x86_64-unknown-linux-gnu/release/iso2wbfs staging/iso2wbfs-linux-x86_64
+          cp target/aarch64-unknown-linux-gnu/release/iso2wbfs staging/iso2wbfs-linux-aarch64
+          cp target/universal2-apple-darwin/release/iso2wbfs staging/iso2wbfs-macos-universal2
 
       - name: Upload Unix artifacts
         uses: actions/upload-artifact@v4
@@ -69,8 +69,8 @@ jobs:
       - name: Prepare artifacts for upload
         run: |
           mkdir staging
-          mv target/x86_64-pc-windows-msvc/release/iso2wbfs.exe staging/iso2wbfs-windows-x86_64.exe
-          mv target/aarch64-pc-windows-msvc/release/iso2wbfs.exe staging/iso2wbfs-windows-aarch64.exe
+          cp target/x86_64-pc-windows-msvc/release/iso2wbfs.exe staging/iso2wbfs-windows-x86_64.exe
+          cp target/aarch64-pc-windows-msvc/release/iso2wbfs.exe staging/iso2wbfs-windows-aarch64.exe
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
