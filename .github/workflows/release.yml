@@ -13,65 +13,86 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-release:
-    name: Build for All Platforms
-    runs-on: ubuntu-22.04
+  build-unix:
+    name: Build for Linux & MacOS
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust and Windows targets using rustup
-        run: rustup target add x86_64-pc-windows-gnu aarch64-pc-windows-gnu
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-
-      - name: Configure Cargo to use Zig as the linker for Windows
-        run: |
-          mkdir -p .cargo
-          # Note: Zig uses 'windows-gnu' while Rust uses 'pc-windows-gnu'
-          echo '[target.x86_64-pc-windows-gnu]' >> .cargo/config.toml
-          echo 'linker = "zig cc -target x86_64-windows-gnu"' >> .cargo/config.toml
-          echo '[target.aarch64-pc-windows-gnu]' >> .cargo/config.toml
-          echo 'linker = "zig cc -target aarch64-windows-gnu"' >> .cargo/config.toml
-
-      # Part 1: Build for Linux x86_64 natively
-      - name: Build for Linux x86_64 (Native)
-        run: cargo build --release --target x86_64-unknown-linux-gnu
-
-      # Part 2: Build for Linux aarch64 & macOS using cargo-zigbuild
-      - name: Build for Linux aarch64 & macOS
+      - name: Build for Linux x86_64
         run: |
           docker run --rm -v ${{ github.workspace }}:/io -w /io \
             ghcr.io/rust-cross/cargo-zigbuild \
-            sh -c " \
-              cargo zigbuild --release --target aarch64-unknown-linux-gnu && \
-              cargo zigbuild --release --target universal2-apple-darwin \
-            "
+            cargo zigbuild --release --target x86_64-unknown-linux-gnu
 
-      # Part 3: Build for Windows using Cargo + Zig linker
-      - name: Build for Windows
+      - name: Build for Linux aarch64
         run: |
-          cargo build --release --target x86_64-pc-windows-gnu
-          cargo build --release --target aarch64-pc-windows-gnu
+          docker run --rm -v ${{ github.workspace }}:/io -w /io \
+            ghcr.io/rust-cross/cargo-zigbuild \
+            cargo zigbuild --release --target aarch64-unknown-linux-gnu
 
-      # Part 4: Package all binaries and create the release
-      - name: Move the executables into ./dist
+      - name: Build for macOS Universal2
         run: |
-          mkdir dist
-          # Binaries from native and zigbuild Linux builds
-          mv ./target/x86_64-unknown-linux-gnu/release/iso2wbfs ./dist/iso2wbfs-linux-x86_64
-          mv ./target/aarch64-unknown-linux-gnu/release/iso2wbfs ./dist/iso2wbfs-linux-aarch64
-          # Binary from cargo-zigbuild
-          mv ./target/universal2-apple-darwin/release/iso2wbfs ./dist/iso2wbfs-macos-universal2
-          # Binaries from Cargo + Zig
-          mv ./target/x86_64-pc-windows-gnu/release/iso2wbfs.exe ./dist/iso2wbfs-windows-x86_64.exe
-          mv ./target/aarch64-pc-windows-gnu/release/iso2wbfs.exe ./dist/iso2wbfs-windows-aarch64.exe
+          docker run --rm -v ${{ github.workspace }}:/io -w /io \
+            ghcr.io/rust-cross/cargo-zigbuild \
+            cargo zigbuild --release --target universal2-apple-darwin
+
+      - name: Prepare artifacts for upload
+        run: |
+          mkdir staging
+          mv target/x86_64-unknown-linux-gnu/release/iso2wbfs staging/iso2wbfs-linux-x86_64
+          mv target/aarch64-unknown-linux-gnu/release/iso2wbfs staging/iso2wbfs-linux-aarch64
+          mv target/universal2-apple-darwin/release/iso2wbfs staging/iso2wbfs-macos-universal2
+
+      - name: Upload Unix artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: unix-builds
+          path: staging/*
+
+  build-windows:
+    name: Build for Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install targets
+        run: rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+
+      - name: Build for Windows (x86_64 & aarch64)
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+          cargo build --release --target aarch64-pc-windows-msvc
+
+      - name: Prepare artifacts for upload
+        run: |
+          mkdir staging
+          mv target/x86_64-pc-windows-msvc/release/iso2wbfs.exe staging/iso2wbfs-windows-x86_64.exe
+          mv target/aarch64-pc-windows-msvc/release/iso2wbfs.exe staging/iso2wbfs-windows-aarch64.exe
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-builds
+          path: staging/*
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-unix, build-windows]
+    steps:
+      - name: Download all artifacts into a single directory
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./dist/*
+          files: dist/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
