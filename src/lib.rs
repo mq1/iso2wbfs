@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2025 Manuel Quarneti <mq1@ik.me>
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! A Rust library to convert Wii disc images to the split WBFS file format,
-//! replicating the default behavior of `wbfs_file v2.9`.
+//! A Rust library to convert Wii and GameCube disc images, replicating the
+//! default behavior of `wbfs_file v2.9` for Wii and creating standard ISOs for GameCube.
 
 use nod::common::Format;
 use nod::read::{DiscOptions, DiscReader};
+use nod::util::buf_copy;
 use nod::write::{DiscWriter, FormatOptions, ProcessOptions};
 use sanitize_filename_reader_friendly::sanitize;
 use std::fs::{self, File, OpenOptions};
@@ -26,7 +27,7 @@ pub enum ConversionError {
     Nod(#[from] nod::Error),
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
-    #[error("Input file is not a valid Wii disc: {0}")]
+    #[error("Input file is not a valid Wii or GameCube disc: {0}")]
     InvalidDisc(String),
 }
 
@@ -34,7 +35,7 @@ type Result<T> = std::result::Result<T, ConversionError>;
 
 // --- I/O Handling for Split Files ---
 
-/// Manages writing data across multiple split files.
+/// Manages writing data across multiple split files for WBFS.
 struct SplitWriter {
     base_path: PathBuf,
     split_size: u64,
@@ -152,63 +153,81 @@ impl SplitWriter {
 /// Public entry point for the conversion process.
 ///
 /// # Arguments
-/// * `input_path` - Path to the source Wii disc image.
+/// * `input_path` - Path to the source Wii or GameCube disc image.
 /// * `output_dir` - Path to the directory where output files will be created.
 pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
     info!("Opening disc image: {}", input_path.display());
-    let disc = DiscReader::new(input_path, &DiscOptions::default())?;
+    // Make disc mutable to allow for direct copying for ISO conversion.
+    let mut disc = DiscReader::new(input_path, &DiscOptions::default())?;
 
-    if !disc.header().is_wii() {
-        return Err(ConversionError::InvalidDisc(
-            "Input file is not a Wii disc.".to_string(),
-        ));
-    }
-
-    // --- Path setup ---
+    // --- Common Path Setup ---
     let header = disc.header();
     let game_id = header.game_id_str();
     let game_title = header.game_title_str();
     let sanitized_title = sanitize(game_title);
     let game_dir_name = format!("{} [{}]", sanitized_title, game_id);
-    let game_output_dir = output_dir.join(game_dir_name);
-    info!("Creating game directory: {}", game_output_dir.display());
-    fs::create_dir_all(&game_output_dir)?;
-    let base_path = game_output_dir.join(format!("{}.wbfs", game_id));
-    // --- End Path setup ---
 
-    let mut split_writer = SplitWriter::new(&base_path, SPLIT_SIZE);
+    if header.is_wii() {
+        // --- Wii to Split WBFS Conversion ---
+        info!("Detected Wii disc. Converting to split WBFS format.");
+        let game_output_dir = output_dir.join("wbfs").join(&game_dir_name);
+        info!("Creating game directory: {}", game_output_dir.display());
+        fs::create_dir_all(&game_output_dir)?;
+        let base_path = game_output_dir.join(format!("{}.wbfs", game_id));
 
-    // Configure the WBFS writer using nod's defaults.
-    let format_options = FormatOptions::new(Format::Wbfs);
+        let mut split_writer = SplitWriter::new(&base_path, SPLIT_SIZE);
 
-    info!("Initializing WBFS writer...");
-    let disc_writer = DiscWriter::new(disc, &format_options)?;
+        // Configure the WBFS writer using nod's defaults.
+        let format_options = FormatOptions::new(Format::Wbfs);
 
-    // Set the number of threads to use (one less than the number of physical cores)
-    let processor_threads = (num_cpus::get_physical() - 1).min(1);
+        info!("Initializing WBFS writer...");
+        let disc_writer = DiscWriter::new(disc, &format_options)?;
 
-    let process_options = ProcessOptions {
-        processor_threads,
-        ..Default::default()
-    };
-    info!("Processing disc with {} threads...", processor_threads);
+        // Set the number of threads to use (one less than physical cores, but at least 1).
+        let processor_threads = (num_cpus::get_physical() - 1).max(1);
 
-    let finalization = disc_writer.process(
-        |data, _progress, _total| {
-            if !data.is_empty() {
-                split_writer.write_all(data.as_ref())?;
-            }
-            Ok(())
-        },
-        &process_options,
-    )?;
+        let process_options = ProcessOptions {
+            processor_threads,
+            ..Default::default()
+        };
+        info!("Processing disc with {} threads...", processor_threads);
 
-    info!("Writing final WBFS header...");
-    if !finalization.header.is_empty() {
-        split_writer.write_all_at(0, finalization.header.as_ref())?;
+        let finalization = disc_writer.process(
+            |data, _progress, _total| {
+                if !data.is_empty() {
+                    split_writer.write_all(data.as_ref())?;
+                }
+                Ok(())
+            },
+            &process_options,
+        )?;
+
+        info!("Writing final WBFS header...");
+        if !finalization.header.is_empty() {
+            split_writer.write_all_at(0, finalization.header.as_ref())?;
+        }
+
+        split_writer.finalize()?;
+    } else if header.is_gamecube() {
+        // --- GameCube to ISO Conversion ---
+        info!("Detected GameCube disc. Converting to ISO format.");
+        let game_output_dir = output_dir.join("games").join(&game_dir_name);
+        info!("Creating game directory: {}", game_output_dir.display());
+        fs::create_dir_all(&game_output_dir)?;
+        let output_iso_path = game_output_dir.join(format!("{}.iso", game_id));
+
+        info!("Creating output file: {}", output_iso_path.display());
+        let mut out_file = File::create(&output_iso_path)?;
+
+        info!("Writing ISO data...");
+        // DiscReader implements BufRead, so we can copy it directly to create an ISO.
+        let bytes_written = buf_copy(&mut disc, &mut out_file)?;
+        info!("Wrote {} bytes to ISO.", bytes_written);
+    } else {
+        return Err(ConversionError::InvalidDisc(
+            "Input file is not a valid Wii or GameCube disc.".to_string(),
+        ));
     }
-
-    split_writer.finalize()?;
 
     info!("Conversion complete!");
     Ok(())
