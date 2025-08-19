@@ -214,7 +214,14 @@ pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
         let game_output_dir = output_dir.join("games").join(&game_dir_name);
         info!("Creating game directory: {}", game_output_dir.display());
         fs::create_dir_all(&game_output_dir)?;
-        let output_iso_path = game_output_dir.join(format!("{}.iso", game_id));
+
+        // --- Nintendont Naming Convention Logic ---
+        let iso_filename = match header.disc_num {
+            0 => "game.iso".to_string(),
+            n => format!("disc{}.iso", n + 1),
+        };
+        let output_iso_path = game_output_dir.join(iso_filename);
+        // --- End Nintendont Naming ---
 
         info!("Creating output file: {}", output_iso_path.display());
         let mut out_file = File::create(&output_iso_path)?;
