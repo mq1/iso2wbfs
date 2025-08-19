@@ -1,6 +1,6 @@
 # iso2wbfs
 
-A simple library / command-line tool to convert Nintendo Wii / GameCube Disc images to WBFS.
+A simple library / command-line tool to convert Nintendo Wii / GameCube Disc images for playing on Wiis.
 
 This is only a thin wrapper around [NOD](https://github.com/encounter/nod)
 
