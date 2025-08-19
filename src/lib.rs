@@ -6,6 +6,7 @@
 
 use bitvec::prelude::*;
 use nod::{Disc, DiscHeader, SECTOR_SIZE as WII_SECTOR_SIZE};
+use sanitize_filename_reader_friendly::sanitize;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -24,8 +25,6 @@ const WII_MAX_SECTORS: usize = 143432 * 2;
 const SPLIT_SIZE: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
 /// The maximum number of file splits allowed.
 const MAX_SPLITS: usize = 10;
-/// Invalid characters for filenames, to be replaced with '_'.
-const INVALID_FILENAME_CHARS: &str = "/\\:|<>?*\"'";
 
 // --- Error Handling ---
 
@@ -179,16 +178,11 @@ struct OutputPaths {
 impl OutputPaths {
     fn new(output_dir: &Path, header: &DiscHeader) -> Result<Self> {
         let game_id = header.game_id_str();
-        let mut game_title = header.game_title_str().to_string();
-
-        // Sanitize game title for use in a directory name.
-        game_title = game_title.trim().to_string();
-        for c in INVALID_FILENAME_CHARS.chars() {
-            game_title = game_title.replace(c, "_");
-        }
+        let game_title = header.game_title_str();
+        let sanitized_title = sanitize(game_title);
 
         // Create the game-specific subdirectory: TITLE [ID]
-        let game_dir_name = format!("{} [{}]", game_title, game_id);
+        let game_dir_name = format!("{} [{}]", sanitized_title, game_id);
         let game_output_dir = output_dir.join(game_dir_name);
         info!("Creating game directory: {}", game_output_dir.display());
         fs::create_dir_all(&game_output_dir)?;

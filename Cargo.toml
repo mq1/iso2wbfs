@@ -15,6 +15,7 @@ bitvec = "1.0"
 thiserror = "2.0"
 zerocopy = "0.8"
 color-eyre = "0.6"
+sanitize-filename-reader-friendly = "2.3"
 
 [profile.release]
 opt-level = 3
