@@ -2,6 +2,8 @@
 
 A simple library / command-line tool to convert Nintendo Wii Disc images to WBFS.
 
+This is only a thin wrapper around [NOD](https://github.com/encounter/nod)
+
 ## Features
 
 - Simple CLI interface
