@@ -60,11 +60,11 @@ impl SplitWriter {
     /// index 1 -> .wbf1
     /// ...
     fn get_filename(&self, index: usize) -> PathBuf {
-        if index == 0 {
-            self.base_path.with_extension("wbfs")
-        } else {
-            self.base_path.with_extension(format!("wbf{}", index))
-        }
+        let ext = match index {
+            0 => "wbfs",
+            n => &format!("wbf{}", n),
+        };
+        self.base_path.with_extension(ext)
     }
 
     /// Writes a buffer of data sequentially.
