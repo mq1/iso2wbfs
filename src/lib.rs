@@ -45,6 +45,7 @@ struct SplitWriter {
 
 impl SplitWriter {
     /// Creates a new `SplitWriter`.
+    /// The `base_path` should not include an extension.
     fn new(base_path: &Path, split_size: u64) -> Self {
         Self {
             base_path: base_path.to_path_buf(),
@@ -54,16 +55,16 @@ impl SplitWriter {
         }
     }
 
-    /// Generates the filename for a given split index.
+    /// Generates the filename for a given split index. This is an internal helper.
+    /// index 0 -> .wbfs
+    /// index 1 -> .wbf1
+    /// ...
     fn get_filename(&self, index: usize) -> PathBuf {
         if index == 0 {
-            return self.base_path.clone();
+            self.base_path.with_extension("wbfs")
+        } else {
+            self.base_path.with_extension(format!("wbf{}", index))
         }
-        let mut path_str = self.base_path.to_string_lossy().to_string();
-        // Replaces `.wbfs` with `.wbf1`, `.wbf2`, etc.
-        path_str.pop();
-        path_str.push_str(&index.to_string());
-        PathBuf::from(path_str)
     }
 
     /// Writes a buffer of data sequentially.
@@ -173,7 +174,8 @@ pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
         let game_output_dir = output_dir.join("wbfs").join(&game_dir_name);
         info!("Creating game directory: {}", game_output_dir.display());
         fs::create_dir_all(&game_output_dir)?;
-        let base_path = game_output_dir.join(format!("{}.wbfs", game_id));
+        // The base path should not contain an extension.
+        let base_path = game_output_dir.join(game_id);
 
         let mut split_writer = SplitWriter::new(&base_path, SPLIT_SIZE);
 
