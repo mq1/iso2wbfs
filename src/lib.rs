@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 //! A Rust library to convert Wii and GameCube disc images, replicating the
-//! default behavior of `wbfs_file v2.9` for Wii and creating standard ISOs for GameCube.
+//! default behavior of `wbfs_file v2.9` for Wii and creating NKit-compatible
+//! scrubbed ISOs for GameCube.
 
 use nod::common::Format;
 use nod::read::{DiscOptions, DiscReader};
-use nod::util::buf_copy;
 use nod::write::{DiscWriter, FormatOptions, ProcessOptions};
 use sanitize_filename_reader_friendly::sanitize;
 use std::fs::{self, File, OpenOptions};
@@ -159,7 +159,7 @@ impl SplitWriter {
 pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
     info!("Opening disc image: {}", input_path.display());
     // Make disc mutable to allow for direct copying for ISO conversion.
-    let mut disc = DiscReader::new(input_path, &DiscOptions::default())?;
+    let disc = DiscReader::new(input_path, &DiscOptions::default())?;
 
     // --- Common Path Setup ---
     let header = disc.header();
@@ -211,8 +211,8 @@ pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
 
         split_writer.finalize()?;
     } else if header.is_gamecube() {
-        // --- GameCube to ISO Conversion ---
-        info!("Detected GameCube disc. Converting to ISO format.");
+        // --- GameCube to NKit-scrubbed ISO (using CISO format) ---
+        info!("Detected GameCube disc. Converting to NKit-scrubbed ISO format.");
         let game_output_dir = output_dir.join("games").join(&game_dir_name);
         info!("Creating game directory: {}", game_output_dir.display());
         fs::create_dir_all(&game_output_dir)?;
@@ -228,10 +228,40 @@ pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
         info!("Creating output file: {}", output_iso_path.display());
         let mut out_file = File::create(&output_iso_path)?;
 
-        info!("Writing ISO data...");
-        // DiscReader implements BufRead, so we can copy it directly to create an ISO.
-        let bytes_written = buf_copy(&mut disc, &mut out_file)?;
-        info!("Wrote {} bytes to ISO.", bytes_written);
+        // Configure the CISO writer. In `nod`, CISO is uncompressed and
+        // serves as the format for NKit-scrubbed ISOs.
+        let format_options = FormatOptions::new(Format::Ciso);
+
+        info!("Initializing CISO (NKit) writer...");
+        let disc_writer = DiscWriter::new(disc, &format_options)?;
+
+        // Set the number of threads to use (one less than physical cores, but at least 1).
+        let processor_threads = (num_cpus::get_physical() - 1).max(1);
+
+        let process_options = ProcessOptions {
+            processor_threads,
+            ..Default::default()
+        };
+        info!("Processing disc with {} threads...", processor_threads);
+
+        // The CISO writer requires a header to be written at the end.
+        // We first write the data blocks, then seek back to write the header.
+        let finalization = disc_writer.process(
+            |data, _progress, _total| {
+                if !data.is_empty() {
+                    out_file.write_all(data.as_ref())?;
+                }
+                Ok(())
+            },
+            &process_options,
+        )?;
+
+        info!("Writing final CISO (NKit) header...");
+        if !finalization.header.is_empty() {
+            out_file.rewind()?;
+            out_file.write_all(finalization.header.as_ref())?;
+        }
+        out_file.flush()?;
     } else {
         return Err(ConversionError::InvalidDisc(
             "Input file is not a valid Wii or GameCube disc.".to_string(),
