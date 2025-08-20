@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2025 Manuel Quarneti <mq1@ik.me>
 // SPDX-License-Identifier: GPL-2.0-only
 
-use bpaf::{Bpaf, Parser, short};
+use bpaf::Bpaf;
 use color_eyre::eyre::Result;
 use indicatif::{ProgressBar, ProgressStyle};
-use log::LevelFilter;
-use std::path::PathBuf;
+use std::{mem::transmute, path::PathBuf};
 
 /// A Rust utility to convert Wii and GameCube disc images.
 ///
@@ -19,7 +18,8 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Bpaf)]
 #[bpaf(options, version)]
 struct Options {
-    #[bpaf(external(verbose))]
+    /// Increase logging verbosity (-v = info, -vv = debug, -vvv = trace)
+    #[bpaf(short('v'), long("verbose"), req_flag(()), many, map(|v| v.len() as usize))]
     verbose: usize,
 
     /// The input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.).
@@ -29,15 +29,6 @@ struct Options {
     /// The directory where the output files will be created.
     #[bpaf(positional("OUTPUT_DIRECTORY"))]
     output_directory: PathBuf,
-}
-
-fn verbose() -> impl Parser<usize> {
-    short('v')
-        .long("verbose")
-        .help("Increase logging verbosity")
-        .req_flag(())
-        .many()
-        .map(|v| v.len())
 }
 
 fn main() -> Result<()> {
@@ -51,13 +42,8 @@ fn main() -> Result<()> {
 
 /// Initializes the logger with a verbosity level controlled by the `-v` flag.
 fn init_logger(verbosity: usize) {
-    let level = match verbosity {
-        0 => LevelFilter::Warn,
-        1 => LevelFilter::Info,
-        2 => LevelFilter::Debug,
-        _ => LevelFilter::Trace,
-    };
-
+    let level_num = verbosity.min(3) + 2;
+    let level: log::LevelFilter = unsafe { transmute(level_num) };
     env_logger::Builder::new().filter_level(level).init();
 }
 
