@@ -1,13 +1,13 @@
 [package]
 name = "iso2wbfs"
-version = "1.2.3"
+version = "1.2.4"
 edition = "2024"
 authors = ["Manuel Quarneti <mq1@ik.me>"]
 description = "A Rust utility to replicate wbfs_file 2.9 functionality for converting Wii disc images to split WBFS format."
 license = "GPL-2.0-only"
 
 [dependencies]
-nod = "2.0.0-alpha.2"
+nod = "2.0.0-alpha.3"
 bpaf = { version = "0.9", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
