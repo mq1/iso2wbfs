@@ -16,7 +16,8 @@ thiserror = "2.0"
 zerocopy = "0.8"
 color-eyre = "0.6"
 sanitize-filename-reader-friendly = "2.3"
-num_cpus = "1.17.0"
+num_cpus = "1.17"
+indicatif = "0.18"
 
 [profile.release]
 opt-level = 3
