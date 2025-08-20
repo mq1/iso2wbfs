@@ -6,7 +6,7 @@
 //! scrubbed ISOs for GameCube.
 
 use nod::common::Format;
-use nod::read::{DiscOptions, DiscReader};
+use nod::read::{DiscOptions, DiscReader, PartitionEncryption};
 use nod::write::{DiscWriter, FormatOptions, ProcessOptions};
 use sanitize_filename_reader_friendly::sanitize;
 use std::fs::{self, File, OpenOptions};
@@ -156,10 +156,32 @@ impl SplitWriter {
 /// # Arguments
 /// * `input_path` - Path to the source Wii or GameCube disc image.
 /// * `output_dir` - Path to the directory where output files will be created.
-pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
+pub fn convert(
+    input_path: &Path,
+    output_dir: &Path,
+    mut progress_callback: impl FnMut(u64, u64),
+) -> Result<()> {
     info!("Opening disc image: {}", input_path.display());
+
+    // Set the number of threads based on the number of available CPUs.
+    let cpus = num_cpus::get();
+    let preloader_threads = if cpus <= 4 {
+        1
+    } else if cpus <= 8 {
+        2
+    } else {
+        4
+    };
+    let processor_threads = (cpus - preloader_threads).max(1);
+
     // Make disc mutable to allow for direct copying for ISO conversion.
-    let disc = DiscReader::new(input_path, &DiscOptions::default())?;
+    let disc = DiscReader::new(
+        input_path,
+        &DiscOptions {
+            partition_encryption: PartitionEncryption::Original,
+            preloader_threads,
+        },
+    )?;
 
     // --- Common Path Setup ---
     let header = disc.header();
@@ -185,20 +207,24 @@ pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
         info!("Initializing WBFS writer...");
         let disc_writer = DiscWriter::new(disc, &format_options)?;
 
-        // Set the number of threads to use (one less than physical cores, but at least 1).
-        let processor_threads = (num_cpus::get_physical() - 1).max(1);
-
         let process_options = ProcessOptions {
             processor_threads,
-            ..Default::default()
+            digest_crc32: true,
+            digest_md5: false, // MD5 is slow, skip it
+            digest_sha1: true,
+            digest_xxh64: true,
         };
-        info!("Processing disc with {} threads...", processor_threads);
+        info!(
+            "Processing disc with {} threads...",
+            preloader_threads + processor_threads
+        );
 
         let finalization = disc_writer.process(
-            |data, _progress, _total| {
+            |data, progress, total| {
                 if !data.is_empty() {
                     split_writer.write_all(data.as_ref())?;
                 }
+                progress_callback(progress, total);
                 Ok(())
             },
             &process_options,
@@ -235,22 +261,26 @@ pub fn convert(input_path: &Path, output_dir: &Path) -> Result<()> {
         info!("Initializing CISO (NKit) writer...");
         let disc_writer = DiscWriter::new(disc, &format_options)?;
 
-        // Set the number of threads to use (one less than physical cores, but at least 1).
-        let processor_threads = (num_cpus::get_physical() - 1).max(1);
-
         let process_options = ProcessOptions {
             processor_threads,
-            ..Default::default()
+            digest_crc32: true,
+            digest_md5: false, // MD5 is slow, skip it
+            digest_sha1: true,
+            digest_xxh64: true,
         };
-        info!("Processing disc with {} threads...", processor_threads);
+        info!(
+            "Processing disc with {} threads...",
+            preloader_threads + processor_threads
+        );
 
         // The CISO writer requires a header to be written at the end.
         // We first write the data blocks, then seek back to write the header.
         let finalization = disc_writer.process(
-            |data, _progress, _total| {
+            |data, progress, total| {
                 if !data.is_empty() {
                     out_file.write_all(data.as_ref())?;
                 }
+                progress_callback(progress, total);
                 Ok(())
             },
             &process_options,
