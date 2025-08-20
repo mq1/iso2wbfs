@@ -3,6 +3,7 @@
 
 use clap::{Parser, builder::Styles};
 use color_eyre::eyre::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -65,15 +66,34 @@ fn run_conversion(options: &Options) -> Result<()> {
         options.output_directory.display()
     );
 
+    // 1. Create a new progress bar.
+    let pb = ProgressBar::new(0);
+    // 2. Set a style for the progress bar for better visual feedback.
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed}] [{bar}] {bytes}/{total_bytes} (~{eta} remaining)")
+            .unwrap()
+            .progress_chars("=> "),
+    );
+
     // Call the library's main conversion function.
     // It now internally handles whether the disc is a Wii or GameCube image.
     iso2wbfs::convert(
         &options.input_file,
         &options.output_directory,
-        |_progress, _total| {
-            // TODO: Implement a progress bar
+        // 3. Implement the callback to update the progress bar.
+        |progress, total| {
+            // Set the total length of the bar when it's first known.
+            if pb.length().unwrap_or(0) == 0 {
+                pb.set_length(total);
+            }
+            // Update the current position of the bar.
+            pb.set_position(progress);
         },
     )?;
+
+    // 4. Finish the progress bar once the conversion is done.
+    pb.finish_with_message("Conversion finished");
 
     tracing::info!("Conversion completed successfully.");
     Ok(())
