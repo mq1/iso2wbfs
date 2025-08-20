@@ -67,7 +67,13 @@ fn run_conversion(options: &Options) -> Result<()> {
 
     // Call the library's main conversion function.
     // It now internally handles whether the disc is a Wii or GameCube image.
-    iso2wbfs::convert(&options.input_file, &options.output_directory)?;
+    iso2wbfs::convert(
+        &options.input_file,
+        &options.output_directory,
+        |_progress, _total| {
+            // TODO: Implement a progress bar
+        },
+    )?;
 
     tracing::info!("Conversion completed successfully.");
     Ok(())
