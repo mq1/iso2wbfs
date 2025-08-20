@@ -43,7 +43,7 @@ fn main() -> Result<()> {
 /// Initializes the logger with a verbosity level controlled by the `-v` flag.
 fn init_logger(verbosity: usize) {
     let level_num = verbosity.min(3) + 2;
-    let level: log::LevelFilter = unsafe { transmute(level_num) };
+    let level = unsafe { transmute(level_num) }; // don't ask
     env_logger::Builder::new().filter_level(level).init();
 }
 
