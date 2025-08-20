@@ -12,7 +12,7 @@ use sanitize_filename_reader_friendly::sanitize;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, trace};
+use log::{debug, info, trace};
 
 // --- Constants ---
 
