@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2025 Manuel Quarneti <mq1@ik.me>
 // SPDX-License-Identifier: GPL-2.0-only
 
-use clap::{Parser, builder::Styles};
+use bpaf::{Bpaf, Parser, short};
 use color_eyre::eyre::Result;
 use indicatif::{ProgressBar, ProgressStyle};
+use log::LevelFilter;
 use std::path::PathBuf;
-use clap_verbosity_flag::Verbosity;
 
 /// A Rust utility to convert Wii and GameCube disc images.
 ///
@@ -16,37 +16,49 @@ use clap_verbosity_flag::Verbosity;
 ///
 /// Output is organized into 'wbfs' (for Wii) and 'games' (for GameCube)
 /// subdirectories within the specified output directory.
-#[derive(Parser, Debug, Clone)]
-#[command(version, about, long_about, styles = Styles::styled())]
+#[derive(Debug, Clone, Bpaf)]
+#[bpaf(options, version)]
 struct Options {
-    #[command(flatten)]
-    verbose: Verbosity,
+    #[bpaf(external(verbose))]
+    verbose: usize,
 
     /// The input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.).
-    #[arg(name = "INPUT_FILE")]
+    #[bpaf(positional("INPUT_FILE"))]
     input_file: PathBuf,
 
     /// The directory where the output files will be created.
-    #[arg(name = "OUTPUT_DIRECTORY")]
+    #[bpaf(positional("OUTPUT_DIRECTORY"))]
     output_directory: PathBuf,
+}
+
+fn verbose() -> impl Parser<usize> {
+    short('v')
+        .long("verbose")
+        .help("Increase logging verbosity")
+        .req_flag(())
+        .many()
+        .map(|v| v.len())
 }
 
 fn main() -> Result<()> {
     color_eyre::install()?;
-    let options = Options::parse();
-
-    init_logger(&options.verbose);
-
+    let options = options().run();
+    init_logger(options.verbose);
     run_conversion(&options)?;
 
     Ok(())
 }
 
 /// Initializes the logger with a verbosity level controlled by the `-v` flag.
-fn init_logger(verbosity: &Verbosity) {
-    env_logger::Builder::new()
-        .filter_level(verbosity.log_level_filter())
-        .init();
+fn init_logger(verbosity: usize) {
+    let level = match verbosity {
+        0 => LevelFilter::Warn,
+        1 => LevelFilter::Info,
+        2 => LevelFilter::Debug,
+        _ => LevelFilter::Trace,
+    };
+
+    env_logger::Builder::new().filter_level(level).init();
 }
 
 /// Runs the main conversion logic by calling the library function.
