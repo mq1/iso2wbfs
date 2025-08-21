@@ -5,6 +5,7 @@
 //! default behavior of `wbfs_file v2.9` for Wii and creating NKit-compatible
 //! scrubbed ISOs for GameCube.
 
+use log::{debug, info, trace};
 use nod::common::Format;
 use nod::read::{DiscOptions, DiscReader, PartitionEncryption};
 use nod::write::{DiscWriter, FormatOptions, ProcessOptions};
@@ -12,7 +13,6 @@ use sanitize_filename_reader_friendly::sanitize;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use log::{debug, info, trace};
 
 // --- Constants ---
 
@@ -194,6 +194,16 @@ pub fn convert(
         // --- Wii to Split WBFS Conversion ---
         info!("Detected Wii disc. Converting to split WBFS format.");
         let game_output_dir = output_dir.join("wbfs").join(&game_dir_name);
+
+        // Check if game output directory already exists
+        if game_output_dir.exists() {
+            info!(
+                "Game directory already exists at {}. Skipping conversion.",
+                game_output_dir.display()
+            );
+            return Ok(());
+        }
+
         info!("Creating game directory: {}", game_output_dir.display());
         fs::create_dir_all(&game_output_dir)?;
         // The base path should not contain an extension.
@@ -240,6 +250,16 @@ pub fn convert(
         // --- GameCube to NKit-scrubbed ISO (using CISO format) ---
         info!("Detected GameCube disc. Converting to NKit-scrubbed ISO format.");
         let game_output_dir = output_dir.join("games").join(&game_dir_name);
+
+        // Check if game output directory already exists
+        if game_output_dir.exists() {
+            info!(
+                "Game directory already exists at {}. Skipping conversion.",
+                game_output_dir.display()
+            );
+            return Ok(());
+        }
+
         info!("Creating game directory: {}", game_output_dir.display());
         fs::create_dir_all(&game_output_dir)?;
 
