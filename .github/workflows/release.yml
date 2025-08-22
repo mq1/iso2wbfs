@@ -26,6 +26,8 @@ jobs:
         run: |
           cargo zigbuild --release --target x86_64-unknown-linux-gnu &
           cargo zigbuild --release --target aarch64-unknown-linux-gnu &
+          cargo zigbuild --release --target x86_64-apple-darwin &
+          cargo zigbuild --release --target aarch64-apple-darwin &
           cargo zigbuild --release --target universal2-apple-darwin &
           cargo zigbuild --release --target x86_64-pc-windows-gnu &
           cargo zigbuild --release --target aarch64-pc-windows-gnullvm &
@@ -36,6 +38,8 @@ jobs:
           mkdir dist
           mv target/x86_64-unknown-linux-gnu/release/iso2wbfs dist/iso2wbfs-linux-x86_64
           mv target/aarch64-unknown-linux-gnu/release/iso2wbfs dist/iso2wbfs-linux-aarch64
+          mv target/x86_64-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-x86_64
+          mv target/aarch64-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-aarch64
           mv target/universal2-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-universal2
           mv target/x86_64-pc-windows-gnu/release/iso2wbfs.exe dist/iso2wbfs-windows-x86_64.exe
           mv target/aarch64-pc-windows-gnullvm/release/iso2wbfs.exe dist/iso2wbfs-windows-aarch64.exe
