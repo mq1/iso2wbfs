@@ -16,21 +16,20 @@ jobs:
   release:
     name: Build and Release
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rust-cross/cargo-zigbuild
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Build all targets using zigbuild
         run: |
-          docker run --rm -v ${{ github.workspace }}:/io -w /io \
-            ghcr.io/rust-cross/cargo-zigbuild \
-            sh -c "
-              cargo zigbuild --release --target x86_64-unknown-linux-gnu && \
-              cargo zigbuild --release --target aarch64-unknown-linux-gnu && \
-              cargo zigbuild --release --target universal2-apple-darwin && \
-              cargo zigbuild --release --target x86_64-pc-windows-gnu && \
-              cargo zigbuild --release --target aarch64-pc-windows-gnullvm
-            "
+          cargo zigbuild --release --target x86_64-unknown-linux-gnu &
+          cargo zigbuild --release --target aarch64-unknown-linux-gnu &
+          cargo zigbuild --release --target universal2-apple-darwin &
+          cargo zigbuild --release --target x86_64-pc-windows-gnu &
+          cargo zigbuild --release --target aarch64-pc-windows-gnullvm &
+          wait
 
       - name: Prepare artifacts for release
         run: |
