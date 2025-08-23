@@ -32,6 +32,9 @@ jobs:
           # Install aarch64 toolchain
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
+          # Install Windows toolchain
+          sudo apt-get install -y gcc-mingw-w64-aarch64 clang
+
       - name: Build all targets
         run: |
           cargo build --release --target x86_64-unknown-linux-gnu &
