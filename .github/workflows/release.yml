@@ -16,21 +16,30 @@ jobs:
   release:
     name: Build and Release
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/rust-cross/cargo-zigbuild
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build all targets using zigbuild
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,x86_64-apple-darwin,aarch64-apple-darwin,x86_64-pc-windows-gnu,aarch64-pc-windows-gnullvm
+
+      - name: Install dependencies
         run: |
-          cargo zigbuild --release --target x86_64-unknown-linux-gnu &
-          cargo zigbuild --release --target aarch64-unknown-linux-gnu &
-          cargo zigbuild --release --target x86_64-apple-darwin &
-          cargo zigbuild --release --target aarch64-apple-darwin &
-          cargo zigbuild --release --target universal2-apple-darwin &
-          cargo zigbuild --release --target x86_64-pc-windows-gnu &
-          cargo zigbuild --release --target aarch64-pc-windows-gnullvm &
+          sudo apt-get update
+
+          # Install aarch64 toolchain
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build all targets
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu &
+          cargo build --release --target aarch64-unknown-linux-gnu &
+          cargo build --release --target x86_64-apple-darwin &
+          cargo build --release --target aarch64-apple-darwin &
+          cargo build --release --target x86_64-pc-windows-gnu &
+          cargo build --release --target aarch64-pc-windows-gnullvm &
           wait
 
       - name: Prepare artifacts for release
@@ -40,7 +49,6 @@ jobs:
           mv target/aarch64-unknown-linux-gnu/release/iso2wbfs dist/iso2wbfs-linux-aarch64
           mv target/x86_64-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-x86_64
           mv target/aarch64-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-aarch64
-          mv target/universal2-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-universal2
           mv target/x86_64-pc-windows-gnu/release/iso2wbfs.exe dist/iso2wbfs-windows-x86_64.exe
           mv target/aarch64-pc-windows-gnullvm/release/iso2wbfs.exe dist/iso2wbfs-windows-aarch64.exe
 
