@@ -1,9 +1,13 @@
 // SPDX-FileCopyrightText: 2025 Manuel Quarneti <mq1@ik.me>
 // SPDX-License-Identifier: GPL-2.0-only
 
+#[cfg(feature = "cli")]
 use bpaf::Bpaf;
+#[cfg(feature = "cli")]
 use color_eyre::eyre::Result;
+#[cfg(feature = "cli")]
 use indicatif::{ProgressBar, ProgressStyle};
+#[cfg(feature = "cli")]
 use std::{mem::transmute, path::PathBuf};
 
 /// A Rust utility to convert Wii and GameCube disc images.
@@ -15,6 +19,7 @@ use std::{mem::transmute, path::PathBuf};
 ///
 /// Output is organized into 'wbfs' (for Wii) and 'games' (for GameCube)
 /// subdirectories within the specified output directory.
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Bpaf)]
 #[bpaf(options, version)]
 struct Options {
@@ -31,6 +36,7 @@ struct Options {
     output_directory: PathBuf,
 }
 
+#[cfg(feature = "cli")]
 fn main() -> Result<()> {
     color_eyre::install()?;
     let options = options().run();
@@ -41,6 +47,7 @@ fn main() -> Result<()> {
 }
 
 /// Initializes the logger with a verbosity level controlled by the `-v` flag.
+#[cfg(feature = "cli")]
 fn init_logger(verbosity: usize) {
     let level_num = verbosity.min(3) + 2;
     let level = unsafe { transmute(level_num) }; // don't ask
@@ -48,6 +55,7 @@ fn init_logger(verbosity: usize) {
 }
 
 /// Runs the main conversion logic by calling the library function.
+#[cfg(feature = "cli")]
 fn run_conversion(options: &Options) -> Result<()> {
     log::info!(
         "Starting conversion of '{}' into output directory '{}'",
@@ -86,4 +94,9 @@ fn run_conversion(options: &Options) -> Result<()> {
 
     log::info!("Conversion completed successfully.");
     Ok(())
+}
+
+#[cfg(not(feature = "cli"))]
+fn main() {
+    println!("This binary is disabled. To enable it, compile with the `cli` feature.");
 }

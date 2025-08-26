@@ -10,15 +10,31 @@ This is only a thin wrapper around [NOD](https://github.com/encounter/nod)
 - Cross-platform (macOS, Linux, Windows)
 - Supports all Disc files that NOD supports
 
-## Build
+## Building
 
-Clone and build with Cargo:
+This crate can be used as a library or as a command-line tool.
+
+### As a command-line tool
+
+To build the command-line tool, you need to enable the `cli` feature:
 
 ```sh
 git clone https://github.com/mq1/iso2wbfs.git
 cd iso2wbfs
-cargo build --release
+cargo build --release --features cli
 ```
+
+### As a library
+
+To use `iso2wbfs` as a library, add it to your `Cargo.toml` like this:
+
+```toml
+[dependencies]
+iso2wbfs = { git = "https://github.com/mq1/iso2wbfs", tag = "v1.2.7" }
+```
+
+By default, this will only include the library components. The command-line tool and its dependencies will not be
+compiled.
 
 ## Usage
 
