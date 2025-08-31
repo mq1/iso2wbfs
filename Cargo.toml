@@ -9,15 +9,13 @@ license = "GPL-2.0-only"
 [dependencies]
 nod = "2.0.0-alpha.3"
 log = "0.4"
-bitvec = "1.0"
 thiserror = "2.0"
-zerocopy = "0.8"
 sanitize-filename-reader-friendly = "2.3"
 num_cpus = "1.17"
 
 # CLI dependencies
 bpaf = { version = "0.9", features = ["derive"], optional = true }
-env_logger = { version = "0.11", optional = true }
+env_logger = { version = "0.11", optional = true, default-features = false, features = ["auto-color", "humantime"] }
 color-eyre = { version = "0.6", optional = true }
 indicatif = { version = "0.18", optional = true }
 

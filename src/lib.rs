@@ -6,15 +6,13 @@
 //! scrubbed ISOs for GameCube.
 
 use log::{debug, info, trace};
-use nod::common::Format;
+use nod::common::{Compression, Format};
 use nod::read::{DiscOptions, DiscReader, PartitionEncryption};
 use nod::write::{DiscWriter, FormatOptions, ProcessOptions};
 use sanitize_filename_reader_friendly::sanitize;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-
-// --- Constants ---
 
 /// The fixed split size for output files: 4 GiB - 32 KiB.
 const SPLIT_SIZE: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
@@ -29,6 +27,8 @@ pub enum ConversionError {
     Io(#[from] io::Error),
     #[error("Input file is not a valid Wii or GameCube disc: {0}")]
     InvalidDisc(String),
+    #[error("Failed to calculate CRC32")]
+    NoCrc32,
 }
 
 type Result<T> = std::result::Result<T, ConversionError>;
@@ -151,20 +151,9 @@ impl SplitWriter {
     }
 }
 
-/// Public entry point for the conversion process.
-///
-/// # Arguments
-/// * `input_path` - Path to the source Wii or GameCube disc image.
-/// * `output_dir` - Path to the directory where output files will be created.
-pub fn convert(
-    input_path: &Path,
-    output_dir: &Path,
-    mut progress_callback: impl FnMut(u64, u64),
-) -> Result<()> {
-    info!("Opening disc image: {}", input_path.display());
-
-    // Set the number of threads based on the number of available CPUs.
+fn get_thread_count() -> (usize, usize) {
     let cpus = num_cpus::get();
+
     let preloader_threads = if cpus <= 4 {
         1
     } else if cpus <= 8 {
@@ -172,7 +161,29 @@ pub fn convert(
     } else {
         4
     };
-    let processor_threads = (cpus - preloader_threads).max(1);
+
+    let processor_threads = cpus - preloader_threads;
+
+    (preloader_threads, processor_threads)
+}
+
+/// Public entry point for the conversion process.
+///
+/// # Arguments
+/// * `input_path` - Path to the source Wii or GameCube disc image.
+/// * `output_dir` - Path to the directory where output files will be created.
+pub fn convert(
+    input_path: impl AsRef<Path>,
+    output_dir: impl AsRef<Path>,
+    mut progress_callback: impl FnMut(u64, u64),
+) -> Result<()> {
+    let input_path = input_path.as_ref();
+    let output_dir = output_dir.as_ref();
+
+    info!("Opening disc image: {}", input_path.display());
+
+    // Set the number of threads based on the number of available CPUs.
+    let (preloader_threads, processor_threads) = get_thread_count();
 
     // Make disc mutable to allow for direct copying for ISO conversion.
     let disc = DiscReader::new(
@@ -319,5 +330,94 @@ pub fn convert(
     }
 
     info!("Conversion complete!");
+    Ok(())
+}
+
+pub fn crc32(
+    input_path: impl AsRef<Path>,
+    mut progress_callback: impl FnMut(u64, u64),
+) -> Result<u32> {
+    let input_path = input_path.as_ref();
+    let (preloader_threads, processor_threads) = get_thread_count();
+
+    let disc = DiscReader::new(
+        input_path,
+        &DiscOptions {
+            partition_encryption: PartitionEncryption::Original,
+            preloader_threads,
+        },
+    )?;
+    let disc_writer = DiscWriter::new(disc, &FormatOptions::default())?;
+
+    // Process the disc to calculate hashes
+    let finalization = disc_writer.process(
+        |_, progress, total| {
+            progress_callback(progress, total);
+            Ok(())
+        },
+        &ProcessOptions {
+            processor_threads,
+            digest_crc32: true,
+            digest_md5: false, // MD5 is slow, skip it
+            digest_sha1: true,
+            digest_xxh64: true,
+        },
+    )?;
+
+    let crc32 = finalization.crc32.ok_or(ConversionError::NoCrc32);
+
+    crc32
+}
+
+pub fn archive(
+    input_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    mut progress_callback: impl FnMut(u64, u64),
+) -> Result<()> {
+    let input_path = input_path.as_ref();
+    let output_path = output_path.as_ref();
+    let (preloader_threads, processor_threads) = get_thread_count();
+
+    let disc = DiscReader::new(
+        input_path,
+        &DiscOptions {
+            partition_encryption: PartitionEncryption::Original,
+            preloader_threads,
+        },
+    )?;
+
+    let mut output_file = File::create(output_path)?;
+
+    let options = FormatOptions {
+        format: Format::Rvz,
+        compression: Compression::Zstandard(19),
+        block_size: Format::Rvz.default_block_size(),
+    };
+
+    let writer = DiscWriter::new(disc, &options)?;
+
+    let process_options = ProcessOptions {
+        processor_threads,
+        digest_crc32: true,
+        digest_md5: false, // MD5 is slow, skip it
+        digest_sha1: true,
+        digest_xxh64: true,
+    };
+
+    let finalization = writer.process(
+        |data, progress, total| {
+            output_file.write_all(data.as_ref())?;
+            progress_callback(progress, total);
+            Ok(())
+        },
+        &process_options,
+    )?;
+
+    if !finalization.header.is_empty() {
+        output_file.rewind()?;
+        output_file.write_all(finalization.header.as_ref())?;
+    }
+    output_file.flush()?;
+
     Ok(())
 }
