@@ -5,6 +5,7 @@
 //! default behavior of `wbfs_file v2.9` for Wii and creating NKit-compatible
 //! scrubbed ISOs for GameCube.
 
+use anyhow::{bail, Context, Result};
 use log::{debug, info, trace};
 use nod::common::{Compression, Format};
 use nod::read::{DiscOptions, DiscReader, PartitionEncryption};
@@ -16,22 +17,6 @@ use std::path::{Path, PathBuf};
 
 /// The fixed split size for output files: 4 GiB - 32 KiB.
 const SPLIT_SIZE: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
-
-// --- Error Handling ---
-
-#[derive(Debug, thiserror::Error)]
-pub enum ConversionError {
-    #[error("Nod library error: {0}")]
-    Nod(#[from] nod::Error),
-    #[error("I/O error: {0}")]
-    Io(#[from] io::Error),
-    #[error("Input file is not a valid Wii or GameCube disc: {0}")]
-    InvalidDisc(String),
-    #[error("Failed to calculate CRC32")]
-    NoCrc32,
-}
-
-type Result<T> = std::result::Result<T, ConversionError>;
 
 // --- I/O Handling for Split Files ---
 
@@ -114,7 +99,7 @@ impl SplitWriter {
                 .write(true)
                 .create(true)
                 .truncate(true)
-                .open(filename)?;
+                .open(&filename)?;
             self.files[index] = Some(file);
         }
 
@@ -144,7 +129,7 @@ impl SplitWriter {
                 }
             } else if filename.exists() {
                 debug!("Removing unused split file: {}", filename.display());
-                fs::remove_file(filename)?;
+                fs::remove_file(&filename)?;
             }
         }
         Ok(())
@@ -192,7 +177,8 @@ pub fn convert(
             partition_encryption: PartitionEncryption::Original,
             preloader_threads,
         },
-    )?;
+    )
+    .with_context(|| format!("Failed to read disc image: {}", input_path.display()))?;
 
     // --- Common Path Setup ---
     let header = disc.header();
@@ -216,7 +202,8 @@ pub fn convert(
         }
 
         info!("Creating game directory: {}", game_output_dir.display());
-        fs::create_dir_all(&game_output_dir)?;
+        fs::create_dir_all(&game_output_dir)
+            .with_context(|| format!("Failed to create directory: {}", game_output_dir.display()))?;
         // The base path should not contain an extension.
         let base_path = game_output_dir.join(game_id);
 
@@ -226,7 +213,7 @@ pub fn convert(
         let format_options = FormatOptions::new(Format::Wbfs);
 
         info!("Initializing WBFS writer...");
-        let disc_writer = DiscWriter::new(disc, &format_options)?;
+        let disc_writer = DiscWriter::new(disc, &format_options).context("Failed to initialize WBFS writer")?;
 
         let process_options = ProcessOptions {
             processor_threads,
@@ -240,23 +227,27 @@ pub fn convert(
             preloader_threads + processor_threads
         );
 
-        let finalization = disc_writer.process(
-            |data, progress, total| {
-                if !data.is_empty() {
-                    split_writer.write_all(data.as_ref())?;
-                }
-                progress_callback(progress, total);
-                Ok(())
-            },
-            &process_options,
-        )?;
+        let finalization = disc_writer
+            .process(
+                |data, progress, total| {
+                    if !data.is_empty() {
+                        split_writer.write_all(data.as_ref())?;
+                    }
+                    progress_callback(progress, total);
+                    Ok(())
+                },
+                &process_options,
+            )
+            .context("Failed to process disc for WBFS conversion")?;
 
         info!("Writing final WBFS header...");
         if !finalization.header.is_empty() {
-            split_writer.write_all_at(0, finalization.header.as_ref())?;
+            split_writer
+                .write_all_at(0, finalization.header.as_ref())
+                .context("Failed to write final WBFS header")?;
         }
 
-        split_writer.finalize()?;
+        split_writer.finalize().context("Failed to finalize split writer")?;
     } else if header.is_gamecube() {
         // --- GameCube to NKit-scrubbed ISO (using CISO format) ---
         info!("Detected GameCube disc. Converting to NKit-scrubbed ISO format.");
@@ -272,7 +263,8 @@ pub fn convert(
         }
 
         info!("Creating game directory: {}", game_output_dir.display());
-        fs::create_dir_all(&game_output_dir)?;
+        fs::create_dir_all(&game_output_dir)
+            .with_context(|| format!("Failed to create directory: {}", game_output_dir.display()))?;
 
         // --- Nintendont Naming Convention Logic ---
         let iso_filename = match header.disc_num {
@@ -283,14 +275,15 @@ pub fn convert(
         // --- End Nintendont Naming ---
 
         info!("Creating output file: {}", output_iso_path.display());
-        let mut out_file = File::create(&output_iso_path)?;
+        let mut out_file = File::create(&output_iso_path)
+            .with_context(|| format!("Failed to create output file: {}", output_iso_path.display()))?;
 
         // Configure the CISO writer. In `nod`, CISO is uncompressed and
         // serves as the format for NKit-scrubbed ISOs.
         let format_options = FormatOptions::new(Format::Ciso);
 
         info!("Initializing CISO (NKit) writer...");
-        let disc_writer = DiscWriter::new(disc, &format_options)?;
+        let disc_writer = DiscWriter::new(disc, &format_options).context("Failed to initialize CISO writer")?;
 
         let process_options = ProcessOptions {
             processor_threads,
@@ -306,27 +299,29 @@ pub fn convert(
 
         // The CISO writer requires a header to be written at the end.
         // We first write the data blocks, then seek back to write the header.
-        let finalization = disc_writer.process(
-            |data, progress, total| {
-                if !data.is_empty() {
-                    out_file.write_all(data.as_ref())?;
-                }
-                progress_callback(progress, total);
-                Ok(())
-            },
-            &process_options,
-        )?;
+        let finalization = disc_writer
+            .process(
+                |data, progress, total| {
+                    if !data.is_empty() {
+                        out_file.write_all(data.as_ref())?;
+                    }
+                    progress_callback(progress, total);
+                    Ok(())
+                },
+                &process_options,
+            )
+            .context("Failed to process disc for CISO conversion")?;
 
         info!("Writing final CISO (NKit) header...");
         if !finalization.header.is_empty() {
-            out_file.rewind()?;
-            out_file.write_all(finalization.header.as_ref())?;
+            out_file.rewind().context("Failed to rewind output file")?;
+            out_file
+                .write_all(finalization.header.as_ref())
+                .context("Failed to write final CISO header")?;
         }
-        out_file.flush()?;
+        out_file.flush().context("Failed to flush output file")?;
     } else {
-        return Err(ConversionError::InvalidDisc(
-            "Input file is not a valid Wii or GameCube disc.".to_string(),
-        ));
+        bail!("Input file is not a valid Wii or GameCube disc.");
     }
 
     info!("Conversion complete!");
@@ -346,27 +341,33 @@ pub fn crc32(
             partition_encryption: PartitionEncryption::Original,
             preloader_threads,
         },
-    )?;
-    let disc_writer = DiscWriter::new(disc, &FormatOptions::default())?;
+    )
+    .with_context(|| format!("Failed to read disc image: {}", input_path.display()))?;
+    let disc_writer =
+        DiscWriter::new(disc, &FormatOptions::default()).context("Failed to initialize disc writer")?;
 
     // Process the disc to calculate hashes
-    let finalization = disc_writer.process(
-        |_, progress, total| {
-            progress_callback(progress, total);
-            Ok(())
-        },
-        &ProcessOptions {
-            processor_threads,
-            digest_crc32: true,
-            digest_md5: false, // MD5 is slow, skip it
-            digest_sha1: true,
-            digest_xxh64: true,
-        },
-    )?;
+    let finalization = disc_writer
+        .process(
+            |_, progress, total| {
+                progress_callback(progress, total);
+                Ok(())
+            },
+            &ProcessOptions {
+                processor_threads,
+                digest_crc32: true,
+                digest_md5: false, // MD5 is slow, skip it
+                digest_sha1: true,
+                digest_xxh64: true,
+            },
+        )
+        .context("Failed to process disc for CRC32 calculation")?;
 
-    let crc32 = finalization.crc32.ok_or(ConversionError::NoCrc32);
+    let crc32 = finalization
+        .crc32
+        .context("CRC32 digest was not calculated")?;
 
-    crc32
+    Ok(crc32)
 }
 
 pub fn archive(
@@ -384,9 +385,11 @@ pub fn archive(
             partition_encryption: PartitionEncryption::Original,
             preloader_threads,
         },
-    )?;
+    )
+    .with_context(|| format!("Failed to read disc image: {}", input_path.display()))?;
 
-    let mut output_file = File::create(output_path)?;
+    let mut output_file = File::create(output_path)
+        .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
 
     let options = FormatOptions {
         format: Format::Rvz,
@@ -394,7 +397,7 @@ pub fn archive(
         block_size: Format::Rvz.default_block_size(),
     };
 
-    let writer = DiscWriter::new(disc, &options)?;
+    let writer = DiscWriter::new(disc, &options).context("Failed to initialize RVZ writer")?;
 
     let process_options = ProcessOptions {
         processor_threads,
@@ -404,20 +407,24 @@ pub fn archive(
         digest_xxh64: true,
     };
 
-    let finalization = writer.process(
-        |data, progress, total| {
-            output_file.write_all(data.as_ref())?;
-            progress_callback(progress, total);
-            Ok(())
-        },
-        &process_options,
-    )?;
+    let finalization = writer
+        .process(
+            |data, progress, total| {
+                output_file.write_all(data.as_ref())?;
+                progress_callback(progress, total);
+                Ok(())
+            },
+            &process_options,
+        )
+        .context("Failed to process disc for RVZ archival")?;
 
     if !finalization.header.is_empty() {
-        output_file.rewind()?;
-        output_file.write_all(finalization.header.as_ref())?;
+        output_file.rewind().context("Failed to rewind RVZ file")?;
+        output_file
+            .write_all(finalization.header.as_ref())
+            .context("Failed to write final RVZ header")?;
     }
-    output_file.flush()?;
+    output_file.flush().context("Failed to flush RVZ file")?;
 
     Ok(())
 }

@@ -7,20 +7,19 @@ description = "A Rust utility to replicate wbfs_file 2.9 functionality for conve
 license = "GPL-2.0-only"
 
 [dependencies]
+anyhow = "1.0"
 nod = "2.0.0-alpha.3"
 log = "0.4"
-thiserror = "2.0"
 sanitize-filename-reader-friendly = "2.3"
 num_cpus = "1.17"
 
 # CLI dependencies
-bpaf = { version = "0.9", features = ["derive"], optional = true }
+argh = { version = "0.1", optional = true }
 env_logger = { version = "0.11", optional = true, default-features = false, features = ["auto-color", "humantime"] }
-color-eyre = { version = "0.6", optional = true }
 indicatif = { version = "0.18", optional = true }
 
 [features]
-cli = ["dep:bpaf", "dep:env_logger", "dep:color-eyre", "dep:indicatif"]
+cli = ["dep:argh", "dep:env_logger", "dep:indicatif"]
 
 [[bin]]
 name = "iso2wbfs"
