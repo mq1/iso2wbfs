@@ -2,96 +2,109 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #[cfg(feature = "cli")]
-use anyhow::Result;
+use anyhow::{Context, Result};
 #[cfg(feature = "cli")]
-use argh::FromArgs;
+use clap::{Parser, Subcommand};
 #[cfg(feature = "cli")]
 use indicatif::{ProgressBar, ProgressStyle};
 #[cfg(feature = "cli")]
-use std::{
-    mem::transmute,
-    path::{Path, PathBuf},
-};
+use iso2wbfs::{archive, convert, crc32};
+#[cfg(feature = "cli")]
+use std::path::PathBuf;
 
 #[cfg(feature = "cli")]
-#[derive(FromArgs, Debug)]
-/// A Rust utility to convert Wii and GameCube disc images.
-struct TopLevel {
-    /// increase logging verbosity (-v = info, -vv = debug, -vvv = trace)
-    #[argh(switch, short = 'v')]
-    verbose: i32,
+#[derive(Parser, Debug)]
+#[command(
+    author,
+    version,
+    about = "A Rust utility to convert and manage Wii and GameCube disc images.",
+    long_about = "This tool converts Wii and GameCube disc images to various formats, calculates checksums, and handles archiving to RVZ."
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 
-    #[argh(subcommand)]
-    command: SubCommand,
+    /// Increase logging verbosity (-v = info, -vv = debug, -vvv = trace).
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    verbose: u8,
 }
 
 #[cfg(feature = "cli")]
-#[derive(FromArgs, Debug)]
-#[argh(subcommand)]
-enum SubCommand {
-    Convert(ConvertCommand),
-    Crc32(Crc32Command),
-    Archive(ArchiveCommand),
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Convert a disc image to a different format.
+    Convert(ConvertArgs),
+    /// Calculate the CRC32 checksum of a disc image.
+    Crc32(Crc32Args),
+    /// Archive a disc image to the RVZ format.
+    Archive(ArchiveArgs),
 }
 
 #[cfg(feature = "cli")]
-#[derive(FromArgs, Debug)]
-/// This tool converts Wii disc images (e.g., .iso, .wbfs) into the split WBFS
-/// file format, replicating the default behavior of wbfs_file v2.9.
-///
-/// It also converts GameCube disc images into standard .iso files.
-///
-/// Output is organized into 'wbfs' (for Wii) and 'games' (for GameCube)
-/// subdirectories within the specified output directory.
-#[argh(subcommand, name = "convert")]
-struct ConvertCommand {
-    /// the input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.)
-    #[argh(positional)]
+#[derive(Parser, Debug)]
+pub struct ConvertArgs {
+    /// The input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.).
+    #[arg(required = true)]
     input_file: PathBuf,
-
-    /// the directory where the output files will be created
-    #[argh(positional)]
+    /// The directory where the output files will be created.
+    #[arg(required = true)]
     output_directory: PathBuf,
 }
 
 #[cfg(feature = "cli")]
-#[derive(FromArgs, Debug)]
-/// Calculate CRC32 checksum of a disc image.
-#[argh(subcommand, name = "crc32")]
-struct Crc32Command {
-    /// the input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.)
-    #[argh(positional)]
+#[derive(Parser, Debug)]
+pub struct Crc32Args {
+    /// The input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.).
+    #[arg(required = true)]
     input_file: PathBuf,
 }
 
 #[cfg(feature = "cli")]
-#[derive(FromArgs, Debug)]
-/// Archive a disc image to RVZ format.
-#[argh(subcommand, name = "archive")]
-struct ArchiveCommand {
-    /// the input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.)
-    #[argh(positional)]
+#[derive(Parser, Debug)]
+pub struct ArchiveArgs {
+    /// The input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.).
+    #[arg(required = true)]
     input_file: PathBuf,
-
-    /// the path for the output RVZ file
-    #[argh(positional)]
+    /// The path for the output RVZ file.
+    #[arg(required = true)]
     output_file: PathBuf,
 }
 
 #[cfg(feature = "cli")]
 fn main() -> Result<()> {
-    let options: TopLevel = argh::from_env();
-    init_logger(options.verbose as usize);
+    let cli = Cli::parse();
+    init_logger(cli.verbose);
 
-    match options.command {
-        SubCommand::Convert(c) => {
-            run_conversion(&c.input_file, &c.output_directory)?;
+    match cli.command {
+        Commands::Convert(args) => {
+            log::info!(
+                "Converting '{}' to output directory '{}'",
+                args.input_file.display(),
+                args.output_directory.display()
+            );
+            run_with_progress("Conversion", |progress_cb| {
+                convert(&args.input_file, &args.output_directory, progress_cb)
+            })?;
+            log::info!("Conversion completed successfully.");
         }
-        SubCommand::Crc32(c) => {
-            run_crc32(&c.input_file)?;
+        Commands::Crc32(args) => {
+            log::info!("Calculating CRC32 for '{}'", args.input_file.display());
+            let crc = run_with_progress("CRC32 calculation", |progress_cb| {
+                crc32(&args.input_file, progress_cb)
+            })?;
+            println!("{:08X}", crc);
+            log::info!("CRC32 calculation completed successfully.");
         }
-        SubCommand::Archive(c) => {
-            run_archive(&c.input_file, &c.output_file)?;
+        Commands::Archive(args) => {
+            log::info!(
+                "Archiving '{}' to '{}'",
+                args.input_file.display(),
+                args.output_file.display()
+            );
+            run_with_progress("Archiving", |progress_cb| {
+                archive(&args.input_file, &args.output_file, progress_cb)
+            })?;
+            log::info!("Archiving completed successfully.");
         }
     }
 
@@ -100,89 +113,41 @@ fn main() -> Result<()> {
 
 /// Initializes the logger with a verbosity level controlled by the `-v` flag.
 #[cfg(feature = "cli")]
-fn init_logger(verbosity: usize) {
-    let level_num = verbosity.min(3) + 2;
-    let level = unsafe { transmute(level_num) }; // don't ask
+fn init_logger(verbosity: u8) {
+    let level = match verbosity {
+        0 => log::LevelFilter::Warn,
+        1 => log::LevelFilter::Info,
+        2 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    };
     env_logger::Builder::new().filter_level(level).init();
 }
 
+/// A generic helper to run an operation with a progress bar.
 #[cfg(feature = "cli")]
-fn create_progress_bar() -> ProgressBar {
+fn run_with_progress<F, T>(operation_name: &str, operation: F) -> Result<T>
+where
+    F: FnOnce(&dyn Fn(u64, u64)) -> Result<T>,
+{
     let pb = ProgressBar::new(0);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed}] [{bar}] {bytes}/{total_bytes} (~{eta} remaining)")
-            .unwrap()
+            .template("[{elapsed}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} (~{eta})")
+            .context("Failed to create progress bar style")?
             .progress_chars("=> "),
     );
-    pb
-}
 
-#[cfg(feature = "cli")]
-fn run_conversion(input_file: &Path, output_directory: &Path) -> Result<()> {
-    log::info!(
-        "Starting conversion of '{}' into output directory '{}'",
-        input_file.display(),
-        output_directory.display()
-    );
-
-    let pb = create_progress_bar();
-
-    iso2wbfs::convert(input_file, output_directory, |progress, total| {
-        if pb.length().unwrap_or(0) == 0 {
+    let progress_callback = |progress, total| {
+        if pb.length().unwrap_or(0) != total {
             pb.set_length(total);
         }
         pb.set_position(progress);
-    })?;
+    };
 
-    pb.finish_with_message("Conversion finished");
+    let result = operation(&progress_callback);
 
-    log::info!("Conversion completed successfully.");
-    Ok(())
-}
-
-#[cfg(feature = "cli")]
-fn run_crc32(input_file: &Path) -> Result<()> {
-    log::info!("Calculating CRC32 for '{}'", input_file.display());
-
-    let pb = create_progress_bar();
-
-    let crc = iso2wbfs::crc32(input_file, |progress, total| {
-        if pb.length().unwrap_or(0) == 0 {
-            pb.set_length(total);
-        }
-        pb.set_position(progress);
-    })?;
-
-    pb.finish_with_message("CRC32 calculation finished");
-
-    println!("{:08X}", crc);
-
-    log::info!("CRC32 calculation completed successfully.");
-    Ok(())
-}
-
-#[cfg(feature = "cli")]
-fn run_archive(input_file: &Path, output_file: &Path) -> Result<()> {
-    log::info!(
-        "Archiving '{}' to '{}'",
-        input_file.display(),
-        output_file.display()
-    );
-
-    let pb = create_progress_bar();
-
-    iso2wbfs::archive(input_file, output_file, |progress, total| {
-        if pb.length().unwrap_or(0) == 0 {
-            pb.set_length(total);
-        }
-        pb.set_position(progress);
-    })?;
-
-    pb.finish_with_message("Archiving finished");
-
-    log::info!("Archiving completed successfully.");
-    Ok(())
+    pb.finish_with_message(format!("{} finished", operation_name));
+    result
 }
 
 #[cfg(not(feature = "cli"))]

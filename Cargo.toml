@@ -9,17 +9,17 @@ license = "GPL-2.0-only"
 [dependencies]
 anyhow = "1.0"
 nod = "2.0.0-alpha.3"
-log = "0.4"
 sanitize-filename-reader-friendly = "2.3"
 num_cpus = "1.17"
+log = "0.4"
 
 # CLI dependencies
-argh = { version = "0.1", optional = true }
 env_logger = { version = "0.11", optional = true, default-features = false, features = ["auto-color", "humantime"] }
 indicatif = { version = "0.18", optional = true }
+clap = { version = "4.5", optional = true, features = ["derive"] }
 
 [features]
-cli = ["dep:argh", "dep:env_logger", "dep:indicatif"]
+cli = ["dep:env_logger", "dep:indicatif", "dep:clap"]
 
 [[bin]]
 name = "iso2wbfs"
