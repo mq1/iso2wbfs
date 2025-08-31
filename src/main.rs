@@ -11,6 +11,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use iso2wbfs::{archive, convert, crc32};
 #[cfg(feature = "cli")]
 use std::path::PathBuf;
+#[cfg(feature = "cli")]
+use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "cli")]
 #[derive(Parser, Debug)]
@@ -73,54 +75,65 @@ pub struct ArchiveArgs {
 #[cfg(feature = "cli")]
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    init_logger(cli.verbose);
+    init_subscriber(cli.verbose);
 
     match cli.command {
         Commands::Convert(args) => {
-            log::info!(
-                "Converting '{}' to output directory '{}'",
-                args.input_file.display(),
-                args.output_directory.display()
+            let input_file = &args.input_file;
+            let output_directory = &args.output_directory;
+            tracing::info!(
+                input_file = %input_file.display(),
+                output_directory = %output_directory.display(),
+                "Starting conversion."
             );
             run_with_progress("Conversion", |progress_cb| {
-                convert(&args.input_file, &args.output_directory, progress_cb)
+                convert(input_file, output_directory, progress_cb)
             })?;
-            log::info!("Conversion completed successfully.");
+            tracing::info!("Conversion completed successfully.");
         }
         Commands::Crc32(args) => {
-            log::info!("Calculating CRC32 for '{}'", args.input_file.display());
+            let input_file = &args.input_file;
+            tracing::info!(input_file = %input_file.display(), "Calculating CRC32 checksum.");
             let crc = run_with_progress("CRC32 calculation", |progress_cb| {
-                crc32(&args.input_file, progress_cb)
+                crc32(input_file, progress_cb)
             })?;
             println!("{:08X}", crc);
-            log::info!("CRC32 calculation completed successfully.");
+            tracing::info!("CRC32 calculation completed successfully.");
         }
         Commands::Archive(args) => {
-            log::info!(
-                "Archiving '{}' to '{}'",
-                args.input_file.display(),
-                args.output_file.display()
+            let input_file = &args.input_file;
+            let output_file = &args.output_file;
+            tracing::info!(
+                input_file = %input_file.display(),
+                output_file = %output_file.display(),
+                "Archiving to RVZ format."
             );
             run_with_progress("Archiving", |progress_cb| {
-                archive(&args.input_file, &args.output_file, progress_cb)
+                archive(input_file, output_file, progress_cb)
             })?;
-            log::info!("Archiving completed successfully.");
+            tracing::info!("Archiving completed successfully.");
         }
     }
 
     Ok(())
 }
 
-/// Initializes the logger with a verbosity level controlled by the `-v` flag.
+/// Initializes the JSON logger with a verbosity level controlled by the `-v` flag.
 #[cfg(feature = "cli")]
-fn init_logger(verbosity: u8) {
-    let level = match verbosity {
-        0 => log::LevelFilter::Warn,
-        1 => log::LevelFilter::Info,
-        2 => log::LevelFilter::Debug,
-        _ => log::LevelFilter::Trace,
+fn init_subscriber(verbosity: u8) {
+    let filter = match verbosity {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
     };
-    env_logger::Builder::new().filter_level(level).init();
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
+
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .json()
+        .init();
 }
 
 /// A generic helper to run an operation with a progress bar.
