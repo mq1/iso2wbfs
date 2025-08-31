@@ -359,7 +359,7 @@ pub fn archive(
     output_dir: impl AsRef<Path> + std::fmt::Debug,
     game_name: impl AsRef<str> + std::fmt::Debug,
     mut progress_callback: impl FnMut(u64, u64),
-) -> Result<()> {
+) -> Result<PathBuf> {
     let input_path = input_path.as_ref();
 
     let sanitized_game_name = sanitize(game_name.as_ref());
@@ -417,5 +417,6 @@ pub fn archive(
     output_file.flush().context("Failed to flush RVZ file")?;
 
     info!("RVZ archival complete");
-    Ok(())
+
+    Ok(output_path)
 }
