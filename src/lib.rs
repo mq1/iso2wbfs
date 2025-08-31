@@ -5,7 +5,7 @@
 //! default behavior of `wbfs_file v2.9` for Wii and creating NKit-compatible
 //! scrubbed ISOs for GameCube.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use nod::common::{Compression, Format};
 use nod::read::{DiscOptions, DiscReader, PartitionEncryption};
 use nod::write::{DiscWriter, FormatOptions, ProcessOptions};
@@ -77,11 +77,7 @@ impl SplitWriter {
 
     /// Writes a buffer of data at a specific absolute offset.
     fn write_all_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
-        trace!(
-            bytes = buf.len(),
-            offset,
-            "Writing data at absolute offset"
-        );
+        trace!(bytes = buf.len(), offset, "Writing data at absolute offset");
         let split_index = (offset / self.split_size) as usize;
         let offset_in_split = offset % self.split_size;
 
@@ -188,7 +184,10 @@ pub fn convert(
     let game_dir_name = format!("{} [{}]", sanitized_title, game_id);
 
     if header.is_wii() {
-        info!(game_id, "Detected Wii disc. Converting to split WBFS format.");
+        info!(
+            game_id,
+            "Detected Wii disc. Converting to split WBFS format."
+        );
         let game_output_dir = output_dir.join("wbfs").join(&game_dir_name);
 
         if game_output_dir.exists() {
@@ -199,8 +198,9 @@ pub fn convert(
             return Ok(());
         }
 
-        fs::create_dir_all(&game_output_dir)
-            .with_context(|| format!("Failed to create directory: {}", game_output_dir.display()))?;
+        fs::create_dir_all(&game_output_dir).with_context(|| {
+            format!("Failed to create directory: {}", game_output_dir.display())
+        })?;
         let base_path = game_output_dir.join(game_id);
 
         let mut split_writer = SplitWriter::new(&base_path, SPLIT_SIZE);
@@ -253,8 +253,9 @@ pub fn convert(
             return Ok(());
         }
 
-        fs::create_dir_all(&game_output_dir)
-            .with_context(|| format!("Failed to create directory: {}", game_output_dir.display()))?;
+        fs::create_dir_all(&game_output_dir).with_context(|| {
+            format!("Failed to create directory: {}", game_output_dir.display())
+        })?;
 
         let iso_filename = match header.disc_num {
             0 => "game.iso".to_string(),
@@ -262,8 +263,12 @@ pub fn convert(
         };
         let output_iso_path = game_output_dir.join(iso_filename);
 
-        let mut out_file = File::create(&output_iso_path)
-            .with_context(|| format!("Failed to create output file: {}", output_iso_path.display()))?;
+        let mut out_file = File::create(&output_iso_path).with_context(|| {
+            format!(
+                "Failed to create output file: {}",
+                output_iso_path.display()
+            )
+        })?;
 
         let format_options = FormatOptions::new(Format::Ciso);
         let disc_writer =
@@ -321,8 +326,8 @@ pub fn crc32(
         },
     )
     .with_context(|| format!("Failed to read disc image: {}", input_path.display()))?;
-    let disc_writer =
-        DiscWriter::new(disc, &FormatOptions::default()).context("Failed to initialize disc writer")?;
+    let disc_writer = DiscWriter::new(disc, &FormatOptions::default())
+        .context("Failed to initialize disc writer")?;
 
     let finalization = disc_writer
         .process(
@@ -351,11 +356,17 @@ pub fn crc32(
 #[instrument(skip(progress_callback))]
 pub fn archive(
     input_path: impl AsRef<Path> + std::fmt::Debug,
-    output_path: impl AsRef<Path> + std::fmt::Debug,
+    output_dir: impl AsRef<Path> + std::fmt::Debug,
+    game_name: impl AsRef<str> + std::fmt::Debug,
     mut progress_callback: impl FnMut(u64, u64),
 ) -> Result<()> {
     let input_path = input_path.as_ref();
-    let output_path = output_path.as_ref();
+
+    let sanitized_game_name = sanitize(game_name.as_ref());
+    let output_path = output_dir
+        .as_ref()
+        .join(format!("{}.rvz", sanitized_game_name));
+
     let (preloader_threads, processor_threads) = get_thread_count();
 
     let disc = DiscReader::new(
@@ -367,7 +378,7 @@ pub fn archive(
     )
     .with_context(|| format!("Failed to read disc image: {}", input_path.display()))?;
 
-    let mut output_file = File::create(output_path)
+    let mut output_file = File::create(&output_path)
         .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
 
     let options = FormatOptions {

@@ -67,9 +67,12 @@ pub struct ArchiveArgs {
     /// The input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.).
     #[arg(required = true)]
     input_file: PathBuf,
-    /// The path for the output RVZ file.
+    /// The directory where the output RVZ file will be created.
     #[arg(required = true)]
-    output_file: PathBuf,
+    output_directory: PathBuf,
+    /// The name of the game (used for the output filename).
+    #[arg(required = true)]
+    game_name: String,
 }
 
 #[cfg(feature = "cli")]
@@ -102,14 +105,16 @@ fn main() -> Result<()> {
         }
         Commands::Archive(args) => {
             let input_file = &args.input_file;
-            let output_file = &args.output_file;
+            let output_directory = &args.output_directory;
+            let game_name = &args.game_name;
             tracing::info!(
                 input_file = %input_file.display(),
-                output_file = %output_file.display(),
+                output_directory = %output_directory.display(),
+                game_name,
                 "Archiving to RVZ format."
             );
             run_with_progress("Archiving", |progress_cb| {
-                archive(input_file, output_file, progress_cb)
+                archive(input_file, output_directory, game_name, progress_cb)
             })?;
             tracing::info!("Archiving completed successfully.");
         }
