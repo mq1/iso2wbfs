@@ -26,9 +26,9 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Increase logging verbosity (-v = info, -vv = debug, -vvv = trace).
-    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
-    verbose: u8,
+    /// Enable verbose logging.
+    #[arg(short, long, global = true)]
+    verbose: bool,
 }
 
 #[cfg(feature = "cli")]
@@ -120,13 +120,8 @@ fn main() -> Result<()> {
 
 /// Initializes the JSON logger with a verbosity level controlled by the `-v` flag.
 #[cfg(feature = "cli")]
-fn init_subscriber(verbosity: u8) {
-    let filter = match verbosity {
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
-        _ => "trace",
-    };
+fn init_subscriber(verbose: bool) {
+    let filter = if verbose { "info" } else { "warn" };
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
 
