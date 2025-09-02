@@ -1,6 +1,6 @@
 [package]
 name = "iso2wbfs"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2024"
 authors = ["Manuel Quarneti <mq1@ik.me>"]
 description = "A Rust utility to replicate wbfs_file 2.9 functionality for converting Wii disc images to split WBFS format."
@@ -12,6 +12,7 @@ nod = "2.0.0-alpha.3"
 sanitize-filename-reader-friendly = "2.3"
 num_cpus = "1.17"
 tracing = "0.1"
+tempfile = "3.21"
 
 # CLI dependencies
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter", "fmt", "json"] }
@@ -26,10 +27,11 @@ name = "iso2wbfs"
 required-features = ["cli"]
 
 [profile.release]
-strip = "debuginfo"
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-panic = "abort"
+opt-level = 3          # Highest optimization level for speed
+lto = "fat"            # Full Link Time Optimization across crates
+codegen-units = 1      # Single codegen unit for best cross-function inlining
+strip = "debuginfo"    # Strip everything except debug info (Rust 1.70+)
+panic = "abort"        # Smaller & faster by removing unwinding code
+debug = 1              # Minimal debug info (enough for backtraces & profiling)
 
 [workspace]

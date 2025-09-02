@@ -5,6 +5,9 @@
 //! default behavior of `wbfs_file v2.9` for Wii and creating NKit-compatible
 //! scrubbed ISOs for GameCube.
 
+mod util;
+
+use crate::util::can_write_over_4gb;
 use anyhow::{Context, Result, bail};
 use nod::common::{Compression, Format};
 use nod::read::{DiscOptions, DiscReader, PartitionEncryption};
@@ -18,7 +21,12 @@ use tracing::{debug, info, instrument, trace};
 /// The fixed split size for output files: 4 GiB - 32 KiB.
 const SPLIT_SIZE: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
 
-// --- I/O Handling for Split Files ---
+#[derive(Debug)]
+pub enum WiiOutputFormat {
+    WbfsAuto,
+    WbfsFixed,
+    Iso,
+}
 
 /// Manages writing data across multiple split files for WBFS.
 struct SplitWriter {
@@ -161,6 +169,7 @@ fn get_thread_count() -> (usize, usize) {
 pub fn convert(
     input_path: impl AsRef<Path> + std::fmt::Debug,
     output_dir: impl AsRef<Path> + std::fmt::Debug,
+    wii_output_format: WiiOutputFormat,
     mut progress_callback: impl FnMut(u64, u64),
 ) -> Result<()> {
     let input_path = input_path.as_ref();
@@ -168,7 +177,7 @@ pub fn convert(
 
     let (preloader_threads, processor_threads) = get_thread_count();
 
-    let disc = DiscReader::new(
+    let mut disc = DiscReader::new(
         input_path,
         &DiscOptions {
             partition_encryption: PartitionEncryption::Original,
@@ -203,41 +212,99 @@ pub fn convert(
         })?;
         let base_path = game_output_dir.join(game_id);
 
-        let mut split_writer = SplitWriter::new(&base_path, SPLIT_SIZE);
-        let format_options = FormatOptions::new(Format::Wbfs);
-        let disc_writer =
-            DiscWriter::new(disc, &format_options).context("Failed to initialize WBFS writer")?;
+        match (wii_output_format, can_write_over_4gb(&game_output_dir)) {
+            (WiiOutputFormat::WbfsAuto, true) => {
+                let out_path = base_path.with_extension("wbfs");
+                let mut out_file =
+                    File::create(&out_path).context("Failed to create output file")?;
 
-        let process_options = ProcessOptions {
-            processor_threads,
-            digest_crc32: true,
-            digest_md5: false,
-            digest_sha1: true,
-            digest_xxh64: true,
-        };
+                let options = FormatOptions {
+                    format: Format::Wbfs,
+                    compression: Compression::None,
+                    block_size: Format::Wbfs.default_block_size(),
+                };
 
-        let finalization = disc_writer
-            .process(
-                |data, progress, total| {
-                    if !data.is_empty() {
-                        split_writer.write_all(data.as_ref())?;
-                    }
-                    progress_callback(progress, total);
-                    Ok(())
-                },
-                &process_options,
-            )
-            .context("Failed to process disc for WBFS conversion")?;
+                let mut writer =
+                    DiscWriter::new(disc, &options).context("Failed to create writer")?;
 
-        if !finalization.header.is_empty() {
-            split_writer
-                .write_all_at(0, finalization.header.as_ref())
-                .context("Failed to write final WBFS header")?;
+                let process_options = ProcessOptions {
+                    processor_threads,
+                    digest_crc32: true,
+                    digest_md5: false,
+                    digest_sha1: true,
+                    digest_xxh64: true,
+                };
+
+                let finalization = writer
+                    .process(
+                        |data, progress, total| {
+                            out_file.write_all(data.as_ref())?;
+                            progress_callback(progress, total);
+                            Ok::<(), std::io::Error>(())
+                        },
+                        &process_options,
+                    )
+                    .context("Failed to process disc for WBFS conversion")?;
+
+                if !finalization.header.is_empty() {
+                    out_file.rewind().context("Failed to rewind WBFS file")?;
+                    out_file
+                        .write_all(finalization.header.as_ref())
+                        .context("Failed to write final WBFS header")?;
+                }
+                out_file.flush().context("Failed to flush WBFS file")?;
+
+                info!("WBFS conversion complete");
+            }
+            (WiiOutputFormat::WbfsFixed, true)
+            | (WiiOutputFormat::WbfsFixed, false)
+            | (WiiOutputFormat::WbfsAuto, false) => {
+                let mut split_writer = SplitWriter::new(&base_path, SPLIT_SIZE);
+                let format_options = FormatOptions::new(Format::Wbfs);
+                let disc_writer = DiscWriter::new(disc, &format_options)
+                    .context("Failed to initialize WBFS writer")?;
+
+                let process_options = ProcessOptions {
+                    processor_threads,
+                    digest_crc32: true,
+                    digest_md5: false,
+                    digest_sha1: true,
+                    digest_xxh64: true,
+                };
+
+                let finalization = disc_writer
+                    .process(
+                        |data, progress, total| {
+                            if !data.is_empty() {
+                                split_writer.write_all(data.as_ref())?;
+                            }
+                            progress_callback(progress, total);
+                            Ok(())
+                        },
+                        &process_options,
+                    )
+                    .context("Failed to process disc for WBFS conversion")?;
+
+                if !finalization.header.is_empty() {
+                    split_writer
+                        .write_all_at(0, finalization.header.as_ref())
+                        .context("Failed to write final WBFS header")?;
+                }
+
+                split_writer
+                    .finalize()
+                    .context("Failed to finalize split writer")?;
+            }
+            (WiiOutputFormat::Iso, false) => {
+                bail!("Can't create ISO file on this platform");
+            }
+            (WiiOutputFormat::Iso, true) => {
+                let out_path = base_path.with_extension("iso");
+                let mut out_file =
+                    File::create(&out_path).context("Failed to create output file")?;
+                nod::util::buf_copy(&mut disc, &mut out_file).context("Failed to copy data")?;
+            }
         }
-
-        split_writer
-            .finalize()
-            .context("Failed to finalize split writer")?;
     } else if header.is_gamecube() {
         info!(
             game_id,
