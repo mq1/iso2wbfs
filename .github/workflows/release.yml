@@ -2,47 +2,122 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - "v*.*.*"
+      - 'v*'
+  pull_request:
 
 permissions:
   contents: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  release:
-    name: Build and Release
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/rust-cross/cargo-zigbuild
+  build-linux:
+    name: Build for Linux
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build all targets using zigbuild
-        run: |
-          cargo zigbuild --release --features cli --target x86_64-unknown-linux-gnu &
-          cargo zigbuild --release --features cli --target aarch64-unknown-linux-gnu &
-          cargo zigbuild --release --features cli --target x86_64-apple-darwin &
-          cargo zigbuild --release --features cli --target aarch64-apple-darwin &
-          cargo zigbuild --release --features cli --target universal2-apple-darwin &
-          cargo zigbuild --release --features cli --target x86_64-pc-windows-gnu &
-          cargo zigbuild --release --features cli --target aarch64-pc-windows-gnullvm &
-          wait
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache-key: ${{ matrix.target }}
 
-      - name: Prepare artifacts for release
-        run: |
-          mkdir dist
-          mv target/x86_64-unknown-linux-gnu/release/iso2wbfs dist/iso2wbfs-linux-x86_64
-          mv target/aarch64-unknown-linux-gnu/release/iso2wbfs dist/iso2wbfs-linux-aarch64
-          mv target/x86_64-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-x86_64
-          mv target/aarch64-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-aarch64
-          mv target/universal2-apple-darwin/release/iso2wbfs dist/iso2wbfs-macos-universal2
-          mv target/x86_64-pc-windows-gnu/release/iso2wbfs.exe dist/iso2wbfs-windows-x86_64.exe
-          mv target/aarch64-pc-windows-gnullvm/release/iso2wbfs.exe dist/iso2wbfs-windows-aarch64.exe
+      - name: Set up mold
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: false
+
+      - name: Build the binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Upload Linux distributables
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/iso2wbfs
+
+  build-windows:
+    name: Build for Windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+          - target: aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache-key: ${{ matrix.target }}
+
+      - name: Build the binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Upload Windows distributables
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/iso2wbfs.exe
+
+  build-macos:
+    name: Build for MacOS
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache-key: ${{ matrix.target }}
+
+      - name: Build the binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Upload MacOS distributables
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/iso2wbfs
+
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: [ build-linux, build-windows, build-macos ]
+    steps:
+      - name: Download distributables
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: '*dist*'
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
