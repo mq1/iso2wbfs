@@ -224,7 +224,7 @@ pub fn convert(
                     block_size: Format::Wbfs.default_block_size(),
                 };
 
-                let mut writer =
+                let writer =
                     DiscWriter::new(disc, &options).context("Failed to create writer")?;
 
                 let process_options = ProcessOptions {

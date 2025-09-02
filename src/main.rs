@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 #[cfg(feature = "cli")]
 use indicatif::{ProgressBar, ProgressStyle};
 #[cfg(feature = "cli")]
-use iso2wbfs::{archive, convert, crc32};
+use iso2wbfs::{archive, convert, crc32, WiiOutputFormat};
 #[cfg(feature = "cli")]
 use std::path::PathBuf;
 #[cfg(feature = "cli")]
@@ -43,6 +43,15 @@ enum Commands {
 }
 
 #[cfg(feature = "cli")]
+#[derive(clap::ValueEnum, Clone, Debug, Default)]
+enum WiiOutputFormatCli {
+    #[default]
+    Auto,
+    Fixed,
+    Iso,
+}
+
+#[cfg(feature = "cli")]
 #[derive(Parser, Debug)]
 pub struct ConvertArgs {
     /// The input Wii or GameCube disc image file (.iso, .wbfs, .ciso, etc.).
@@ -51,6 +60,9 @@ pub struct ConvertArgs {
     /// The directory where the output files will be created.
     #[arg(required = true)]
     output_directory: PathBuf,
+    /// [Wii only] The output format for Wii games.
+    #[arg(long, value_enum, default_value_t)]
+    wii_format: WiiOutputFormatCli,
 }
 
 #[cfg(feature = "cli")]
@@ -84,13 +96,19 @@ fn main() -> Result<()> {
         Commands::Convert(args) => {
             let input_file = &args.input_file;
             let output_directory = &args.output_directory;
+            let wii_format = match args.wii_format {
+                WiiOutputFormatCli::Auto => WiiOutputFormat::WbfsAuto,
+                WiiOutputFormatCli::Fixed => WiiOutputFormat::WbfsFixed,
+                WiiOutputFormatCli::Iso => WiiOutputFormat::Iso,
+            };
             tracing::info!(
                 input_file = %input_file.display(),
                 output_directory = %output_directory.display(),
+                wii_format = ?args.wii_format,
                 "Starting conversion."
             );
             run_with_progress("Conversion", |progress_cb| {
-                convert(input_file, output_directory, progress_cb)
+                convert(input_file, output_directory, wii_format, progress_cb)
             })?;
             tracing::info!("Conversion completed successfully.");
         }
