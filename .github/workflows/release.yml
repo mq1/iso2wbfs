@@ -116,8 +116,17 @@ jobs:
       - name: Download distributables
         uses: actions/download-artifact@v4
         with:
-          path: dist
           pattern: '*dist*'
+
+      - name: Rename distributables
+        run: |
+          mkdir dist
+          mv dist-x86_64-unknown-linux-gnu/iso2wbfs dist/iso2wbfs-linux-x86_64
+          mv dist-aarch64-unknown-linux-gnu/iso2wbfs dist/iso2wbfs-linux-aarch64
+          mv dist-x86_64-pc-windows-msvc/iso2wbfs.exe dist/iso2wbfs-windows-x86_64.exe
+          mv dist-aarch64-pc-windows-msvc/iso2wbfs.exe dist/iso2wbfs-windows-aarch64.exe
+          mv dist-x86_64-apple-darwin/iso2wbfs dist/iso2wbfs-macos-x86_64
+          mv dist-aarch64-apple-darwin/iso2wbfs dist/iso2wbfs-macos-aarch64
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
