@@ -21,7 +21,7 @@ use tracing::{debug, info, instrument, trace};
 /// The fixed split size for output files: 4 GiB - 32 KiB.
 const SPLIT_SIZE: u64 = (4 * 1024 * 1024 * 1024) - (32 * 1024);
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WiiOutputFormat {
     WbfsAuto,
     WbfsFixed,
@@ -224,8 +224,7 @@ pub fn convert(
                     block_size: Format::Wbfs.default_block_size(),
                 };
 
-                let writer =
-                    DiscWriter::new(disc, &options).context("Failed to create writer")?;
+                let writer = DiscWriter::new(disc, &options).context("Failed to create writer")?;
 
                 let process_options = ProcessOptions {
                     processor_threads,
